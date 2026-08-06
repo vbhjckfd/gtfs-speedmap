@@ -134,23 +134,29 @@ the popup shows the sample count behind every cell, alongside its speed hour by 
 
 ## Keeping it current
 
-`data/` is git-ignored, so a CI runner starts with nothing and would re-read the whole bucket. The
-derived parquets go back to R2 under `derived/agg/` and `derived/hist/` instead; they are immutable
-once written, so syncing either way is a filename comparison.
+Updating is manual, roughly monthly:
 
 ```bash
-make pull     # download aggregates missing locally
-make push     # upload aggregates missing remotely
-make update   # pull, ingest new days, push, rebuild, deploy
+make update   # ingest the new days, rebuild, deploy
 ```
 
-[`.github/workflows/update.yml`](.github/workflows/update.yml) runs that daily at 03:20 UTC, after
-midnight in Kyiv so the previous local day is complete. It needs six repository secrets —
-`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `CLOUDFLARE_API_TOKEN`,
-`CLOUDFLARE_ACCOUNT_ID` — and fails loudly without them.
+`ingest-all` only reads days with no `data/agg/*.parquet` yet, so a month costs a few minutes even
+though the archive is 88 days deep. The map carries its own date range in the panel, so a stale
+deploy says so rather than pretending to be current.
 
-The first run with an empty `derived/` prefix re-ingests the whole archive (a couple of hours) and
-then pushes it, so every later run is minutes. Running `make push` locally once gets there sooner.
+`data/` is git-ignored and is the only copy of ~330 MB that takes a couple of hours to rebuild from
+scratch. `speedmap.sync` can mirror it into the same bucket under `derived/agg/` and
+`derived/hist/`, which is worth doing before changing machines:
+
+```bash
+make push     # upload aggregates missing remotely
+make pull     # download aggregates missing locally
+```
+
+Both are deliberately off the `make update` path — on the machine that already holds `data/` there
+is nothing to fetch, and a first push is a 330 MB upload that should be a decision rather than a
+side effect. The parquets are immutable once written, so either direction is a filename comparison
+and nothing more.
 
 ## Setup
 

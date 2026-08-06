@@ -12,9 +12,9 @@ help:
 	@echo "make serve                    serve web/ on http://localhost:8000"
 	@echo "make test                     run unit tests"
 	@echo "make deploy                   build, then publish web/ as a Cloudflare Worker"
-	@echo "make pull                     download aggregates from R2 (skips ones on disk)"
-	@echo "make push                     upload new aggregates to R2"
-	@echo "make update                   pull, ingest new days, push, rebuild, deploy"
+	@echo "make update                   ingest new days, rebuild, deploy"
+	@echo "make pull                     optional: download aggregates from R2"
+	@echo "make push                     optional: back up aggregates to R2"
 
 ingest:
 	$(PY) -m speedmap.aggregate $(DATE) $(ARGS)
@@ -34,11 +34,14 @@ test:
 deploy: build
 	npx wrangler deploy
 
+update: ingest-all build
+	npx wrangler deploy
+
+# Off the `update` path on purpose: a monthly run on the machine that already
+# holds data/ has nothing to fetch, and a first push is a 330 MB upload that
+# should be a decision, not a side effect.
 pull:
 	$(PY) -m speedmap.sync pull $(ARGS)
 
 push:
 	$(PY) -m speedmap.sync push $(ARGS)
-
-update: pull ingest-all push build
-	npx wrangler deploy
