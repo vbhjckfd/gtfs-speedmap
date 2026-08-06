@@ -19,6 +19,7 @@ const els = {
   hour: document.getElementById("hour"),
   hourLabel: document.getElementById("hour-label"),
   allHours: document.getElementById("all-hours"),
+  metric: document.getElementById("metric"),
   subtitle: document.getElementById("subtitle"),
   note: document.getElementById("note"),
   ramp: document.getElementById("ramp"),
@@ -141,14 +142,16 @@ const DotLayer = L.Layer.extend({
 
     const r = this._radiusPx();
     const bounds = map.getBounds().pad(0.05);
-    const { lat, lon, v } = current;
+    const { lat, lon } = current;
+    const values = speedValues();
     ctx.globalAlpha = 0.85;
 
     for (let i = 0; i < lat.length; i++) {
+      if (values[i] == null) continue;
       if (lat[i] < bounds.getSouth() || lat[i] > bounds.getNorth()) continue;
       if (lon[i] < bounds.getWest() || lon[i] > bounds.getEast()) continue;
       const p = map.latLngToContainerPoint([lat[i], lon[i]]);
-      ctx.fillStyle = speedColor(v[i]);
+      ctx.fillStyle = speedColor(values[i]);
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
@@ -160,6 +163,15 @@ const DotLayer = L.Layer.extend({
 const dots = new DotLayer();
 
 /* ---------- selection ---------- */
+
+// The chosen statistic ships in the same file as every other one, so switching
+// between them never refetches. Falls back to the average for data built before
+// histograms existed.
+function speedValues(payload) {
+  const source = payload || current;
+  if (!source) return [];
+  return source[els.metric.value] || source.v;
+}
 
 function selectionKey() {
   const month = els.month.value;
@@ -198,7 +210,8 @@ function describe(count) {
   const when = els.allHours.checked
     ? "all hours"
     : `${String(els.hour.value).padStart(2, "0")}:00–${String(els.hour.value).padStart(2, "0")}:59`;
-  return `${month} · ${when} · ${count.toLocaleString()} cells`;
+  const stat = els.metric.selectedOptions[0].textContent.toLowerCase();
+  return `${month} · ${when} · ${count.toLocaleString()} cells · ${stat}`;
 }
 
 async function render() {
@@ -250,11 +263,15 @@ map.on("click", (e) => {
   }
   if (best < 0 || Math.sqrt(bestDist) > tolerance) return;
 
+  const median = current.med ? current.med[best] : null;
+  const rows = [`average ${current.v[best].toFixed(1)} km/h`];
+  if (median != null) rows.push(`median ${median.toFixed(1)} km/h`);
+
   L.popup()
     .setLatLng([current.lat[best], current.lon[best]])
     .setContent(
-      `<div class="cell-popup"><b>${current.v[best].toFixed(1)} km/h</b><br>` +
-        `${current.n[best].toLocaleString()} samples</div>`,
+      `<div class="cell-popup"><b>${speedValues()[best].toFixed(1)} km/h</b><br>` +
+        `${rows.join("<br>")}<br>${current.n[best].toLocaleString()} samples</div>`,
     )
     .openOn(map);
 });
@@ -275,6 +292,13 @@ async function boot() {
   all.textContent = `All months (${index.days.count}d)`;
   els.month.append(all);
   els.month.value = "all";
+
+  for (const metric of index.metrics || [{ key: "v", label: "Average" }]) {
+    const option = document.createElement("option");
+    option.value = metric.key;
+    option.textContent = metric.label;
+    els.metric.append(option);
+  }
 
   const hours = index.hours;
   els.hour.min = String(hours[0]);
@@ -300,6 +324,11 @@ async function boot() {
   els.allHours.addEventListener("change", () => {
     syncHourLabel();
     render();
+  });
+  // Every statistic is already in the loaded payload, so this is a repaint.
+  els.metric.addEventListener("change", () => {
+    dots.redraw();
+    if (current) els.subtitle.textContent = describe(current.lat.length);
   });
 }
 

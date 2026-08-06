@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+# The per-hour aggregates are large and carry no prose worth indexing.
+Disallow: /data/
+
+Sitemap: https://gtfs-speedmap.vbhjckfd.workers.dev/sitemap.xml

@@ -21,15 +21,28 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from . import r2
-from .config import AGG_DIR, CELL_SIZE_M, SPEED_MAX_MPS, STALE_MAX_S, TZ, WORKERS
+from .config import (
+    AGG_DIR,
+    CELL_SIZE_M,
+    HIST_BIN_KMH,
+    HIST_DIR,
+    SPEED_MAX_MPS,
+    STALE_MAX_S,
+    TERMINAL_RADIUS_M,
+    TZ,
+    WORKERS,
+)
+from .depots import load_sites
 from .grid import cell_of, in_bbox, near_trip_stop, project
 from .snapshots import VehicleRow, parse_feed
 from .static_feed import StaticFeed, load_for_date
+from .utm import project_xy
 
 _LOCAL_TZ = ZoneInfo(TZ)
+MPS_TO_KMH = 3.6
 
-# Accumulator layout: (n, sum_speed_mps, sum_lat, sum_lon)
-Cell = tuple[int, float, float, float]
+# Accumulator layout: [n, sum_speed_mps, sum_lat, sum_lon]
+Cell = list
 
 
 class DayStats(Counter):
@@ -43,6 +56,8 @@ class DayStats(Counter):
         "drop_speed",
         "drop_bbox",
         "drop_no_stops",
+        "drop_depot",
+        "drop_at_terminal",
         "drop_at_stop",
         "kept",
     )
@@ -51,15 +66,33 @@ class DayStats(Counter):
         return "  ".join(f"{k}={self[k]}" for k in self.ORDER)
 
 
+def depot_zones() -> list[tuple[float, float, float]]:
+    """Discovered depots as (easting, northing, radius²) for cheap testing."""
+    return [
+        (*project_xy(site["lon"], site["lat"]), site["radius_m"] ** 2)
+        for site in load_sites()
+    ]
+
+
+def in_depot(x: float, y: float, zones: list[tuple[float, float, float]]) -> bool:
+    for zx, zy, r2_limit in zones:
+        if (zx - x) ** 2 + (zy - y) ** 2 <= r2_limit:
+            return True
+    return False
+
+
 def accumulate(
     rows: list[VehicleRow],
     feed: StaticFeed,
     acc: dict[tuple[str, int, int, int], list],
     seen: set[tuple[str, int]],
     stats: DayStats,
+    zones: list[tuple[float, float, float]] | None = None,
+    hist: dict[tuple[str, int, int, int, int], int] | None = None,
 ) -> None:
     """Apply the filter chain to one snapshot's rows and fold survivors into `acc`."""
     bus_routes = feed.bus_route_ids
+    zones = zones if zones is not None else []
     stats["rows_parsed"] += len(rows)
 
     for row in rows:
@@ -97,33 +130,57 @@ def accumulate(
             continue
 
         x, y = project(lon, lat)
+
+        # A depot or off-street layover yard: parked buses, not slow traffic.
+        if in_depot(x, y, zones):
+            stats["drop_depot"] += 1
+            continue
+
+        # End of a run. Buses idle here for minutes, and often stand past the
+        # terminal stop rather than at it, so the exclusion is wider.
+        terminals = feed.terminals_for(row.trip_id, row.route_id)
+        if terminals and near_trip_stop(x, y, terminals, feed, radius_m=TERMINAL_RADIUS_M):
+            stats["drop_at_terminal"] += 1
+            continue
+
         if near_trip_stop(x, y, stops, feed):
             stats["drop_at_stop"] += 1
             continue
 
         local = datetime.fromtimestamp(row.veh_ts, tz=timezone.utc).astimezone(_LOCAL_TZ)
         cx, cy = cell_of(x, y)
-        bucket = acc.get((local.strftime("%Y-%m"), local.hour, cx, cy))
+        key = (local.strftime("%Y-%m"), local.hour, cx, cy)
+        bucket = acc.get(key)
         if bucket is None:
-            acc[(local.strftime("%Y-%m"), local.hour, cx, cy)] = [1, speed, lat, lon]
+            acc[key] = [1, speed, lat, lon]
         else:
             bucket[0] += 1
             bucket[1] += speed
             bucket[2] += lat
             bucket[3] += lon
+
+        if hist is not None:
+            bin_index = int(speed * MPS_TO_KMH / HIST_BIN_KMH)
+            hist_key = (*key, bin_index)
+            hist[hist_key] = hist.get(hist_key, 0) + 1
+
         stats["kept"] += 1
 
 
-def aggregate_day(client, date_str: str, workers: int = WORKERS) -> tuple[pd.DataFrame, DayStats]:
+def aggregate_day(
+    client, date_str: str, workers: int = WORKERS
+) -> tuple[pd.DataFrame, pd.DataFrame, DayStats]:
     feed = load_for_date(client, date_str)
     keys = r2.snapshot_keys(client, date_str)
     if not keys:
-        return pd.DataFrame(), DayStats()
+        return pd.DataFrame(), pd.DataFrame(), DayStats()
 
     acc: dict[tuple[str, int, int, int], list] = {}
+    hist: dict[tuple[str, int, int, int, int], int] = {}
     seen: set[tuple[str, int]] = set()
     stats = DayStats()
     stats["snapshots"] = len(keys)
+    zones = depot_zones()
 
     def fetch(key: str) -> list[VehicleRow]:
         try:
@@ -135,36 +192,43 @@ def aggregate_day(client, date_str: str, workers: int = WORKERS) -> tuple[pd.Dat
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for rows in pool.map(fetch, keys):
-            accumulate(rows, feed, acc, seen, stats)
+            accumulate(rows, feed, acc, seen, stats, zones, hist)
 
-    df = pd.DataFrame(
+    cells = pd.DataFrame(
         [
             (month, hour, cx, cy, n, s_speed, s_lat, s_lon)
             for (month, hour, cx, cy), (n, s_speed, s_lat, s_lon) in acc.items()
         ],
         columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
-    return df, stats
+    bins = pd.DataFrame(
+        [(month, hour, cx, cy, b, n) for (month, hour, cx, cy, b), n in hist.items()],
+        columns=["month", "hour", "cx", "cy", "bin", "n"],
+    )
+    return cells, bins, stats
 
 
 def write_day(client, date_str: str, force: bool = False, workers: int = WORKERS) -> bool:
     AGG_DIR.mkdir(parents=True, exist_ok=True)
+    HIST_DIR.mkdir(parents=True, exist_ok=True)
     out = AGG_DIR / f"{date_str}.parquet"
-    if out.exists() and not force:
+    hist_out = HIST_DIR / f"{date_str}.parquet"
+    if out.exists() and hist_out.exists() and not force:
         print(f"{date_str}  skip (already aggregated)")
         return False
 
     started = time.monotonic()
-    df, stats = aggregate_day(client, date_str, workers=workers)
-    if df.empty:
+    cells, bins, stats = aggregate_day(client, date_str, workers=workers)
+    if cells.empty:
         print(f"{date_str}  no data")
         return False
 
-    df.to_parquet(out, index=False)
+    cells.to_parquet(out, index=False)
+    bins.to_parquet(hist_out, index=False)
     elapsed = time.monotonic() - started
     print(
-        f"{date_str}  {stats['snapshots']} snapshots  {len(df)} cells  "
-        f"{elapsed:.0f}s  {stats.render()}"
+        f"{date_str}  {stats['snapshots']} snapshots  {len(cells)} cells  "
+        f"{len(bins)} bins  {elapsed:.0f}s  {stats.render()}"
     )
     return True
 
@@ -185,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         ap.error("pass a date or --all")
 
-    print(f"cell={CELL_SIZE_M:g}m  {len(dates)} day(s)")
+    print(f"cell={CELL_SIZE_M:g}m  {len(depot_zones())} depot zone(s)  {len(dates)} day(s)")
     for date_str in dates:
         write_day(client, date_str, force=args.force, workers=args.workers)
     return 0

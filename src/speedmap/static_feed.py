@@ -38,26 +38,36 @@ BUS_ROUTE_TYPE = "3"
 class StaticFeed(NamedTuple):
     static_date: str
     bus_route_ids: frozenset[str]
-    # trip_id -> index into `stop_sets`
+    # trip_id -> index into `stop_sets` / `terminal_sets`
     trip_pattern: dict[str, int]
     # (route_id, direction) -> index into `stop_sets`; fallback for trip_ids
     # that no longer exist in this schedule
     route_dir_pattern: dict[tuple[str, str], int]
     stop_sets: list[frozenset[str]]
+    # The first and last stop of each pattern. Buses lay over at these, often
+    # parked well beyond the stop itself, so they get a wider exclusion.
+    terminal_sets: list[frozenset[str]]
     # stop_id -> UTM 35N (easting, northing)
     stop_xy: dict[str, tuple[float, float]]
     # (bucket_x, bucket_y) -> stop_ids whose centre falls in that bucket
     stop_buckets: dict[tuple[int, int], tuple[str, ...]]
 
-    def stops_for(self, trip_id: str, route_id: str) -> frozenset[str] | None:
-        """Stops of this trip; falls back to every stop the route serves in
-        this direction. None when neither is known."""
+    def pattern_for(self, trip_id: str, route_id: str) -> int | None:
+        """This trip's pattern; falls back to the route's pattern in this
+        direction when the trip_id is not in this schedule."""
         idx = self.trip_pattern.get(trip_id)
         if idx is not None:
-            return self.stop_sets[idx]
+            return idx
         direction = trip_id.rsplit("_", 1)[-1]
-        idx = self.route_dir_pattern.get((route_id, direction))
+        return self.route_dir_pattern.get((route_id, direction))
+
+    def stops_for(self, trip_id: str, route_id: str) -> frozenset[str] | None:
+        idx = self.pattern_for(trip_id, route_id)
         return self.stop_sets[idx] if idx is not None else None
+
+    def terminals_for(self, trip_id: str, route_id: str) -> frozenset[str] | None:
+        idx = self.pattern_for(trip_id, route_id)
+        return self.terminal_sets[idx] if idx is not None else None
 
 
 def _read_csv(zf: zipfile.ZipFile, name: str):
@@ -89,24 +99,33 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
             seq_by_trip[trip_id].append((int(st["stop_sequence"]), st["stop_id"]))
 
     stop_sets: list[frozenset[str]] = []
-    interned: dict[frozenset[str], int] = {}
+    terminal_sets: list[frozenset[str]] = []
+    interned: dict[tuple[frozenset[str], frozenset[str]], int] = {}
 
-    def intern(stops: frozenset[str]) -> int:
-        idx = interned.get(stops)
+    def intern(stops: frozenset[str], terminals: frozenset[str]) -> int:
+        idx = interned.get((stops, terminals))
         if idx is None:
             idx = len(stop_sets)
-            interned[stops] = idx
+            interned[(stops, terminals)] = idx
             stop_sets.append(stops)
+            terminal_sets.append(terminals)
         return idx
 
     trip_pattern: dict[str, int] = {}
-    route_dir_union: dict[tuple[str, str], set[str]] = defaultdict(set)
+    route_dir_stops: dict[tuple[str, str], set[str]] = defaultdict(set)
+    route_dir_terminals: dict[tuple[str, str], set[str]] = defaultdict(set)
     for trip_id, seq in seq_by_trip.items():
-        stops = frozenset(stop_id for _, stop_id in seq)
-        trip_pattern[trip_id] = intern(stops)
-        route_dir_union[trip_meta[trip_id]].update(stops)
+        ordered = [stop_id for _, stop_id in sorted(seq)]
+        stops = frozenset(ordered)
+        terminals = frozenset({ordered[0], ordered[-1]})
+        trip_pattern[trip_id] = intern(stops, terminals)
+        route_dir_stops[trip_meta[trip_id]].update(stops)
+        route_dir_terminals[trip_meta[trip_id]].update(terminals)
 
-    route_dir_pattern = {key: intern(frozenset(stops)) for key, stops in route_dir_union.items()}
+    route_dir_pattern = {
+        key: intern(frozenset(stops), frozenset(route_dir_terminals[key]))
+        for key, stops in route_dir_stops.items()
+    }
 
     used = set().union(*stop_sets) if stop_sets else set()
     stop_xy: dict[str, tuple[float, float]] = {}
@@ -124,6 +143,7 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
         trip_pattern=trip_pattern,
         route_dir_pattern=route_dir_pattern,
         stop_sets=stop_sets,
+        terminal_sets=terminal_sets,
         stop_xy=stop_xy,
         stop_buckets={k: tuple(v) for k, v in buckets.items()},
     )

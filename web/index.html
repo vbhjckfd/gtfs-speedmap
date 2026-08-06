@@ -3,7 +3,80 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Lviv bus speeds</title>
+
+    <title>Lviv bus speeds — average speed by hour and month, mapped</title>
+    <meta
+      name="description"
+      content="Where Lviv's buses actually run fast and where they crawl. Average speed per 25 m of street, from millions of archived GTFS-RT positions, with an hour-of-day slider and a month picker. Stops excluded, so it shows running speed."
+    />
+    <link rel="canonical" href="https://gtfs-speedmap.vbhjckfd.workers.dev/" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#0e141c" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Lviv bus speeds" />
+    <meta property="og:title" content="Lviv bus speeds, hour by hour" />
+    <meta
+      property="og:description"
+      content="Average bus speed per 25 m of street across Lviv, built from millions of archived GTFS-RT vehicle positions. Green runs fast, red crawls. Slide through the day, pick a month."
+    />
+    <meta property="og:url" content="https://gtfs-speedmap.vbhjckfd.workers.dev/" />
+    <meta property="og:image" content="https://gtfs-speedmap.vbhjckfd.workers.dev/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="The Lviv bus network drawn as coloured dots, green on the fast outer roads and red through the centre."
+    />
+    <meta property="og:locale" content="en_GB" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Lviv bus speeds, hour by hour" />
+    <meta
+      name="twitter:description"
+      content="Average bus speed per 25 m of street across Lviv, from archived GTFS-RT positions. Green runs fast, red crawls."
+    />
+    <meta name="twitter:image" content="https://gtfs-speedmap.vbhjckfd.workers.dev/og.png" />
+    <meta
+      name="twitter:image:alt"
+      content="The Lviv bus network drawn as coloured dots, green on the fast outer roads and red through the centre."
+    />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": "Lviv bus running speeds by hour and month",
+        "description": "Average bus speed per 25 m grid cell in Lviv, Ukraine, aggregated by hour of day and month from archived GTFS-RT vehicle positions. Positions within 40 m of a stop on the vehicle's own trip are excluded, so the figures describe running speed rather than dwell time. Trolleybuses and trams are excluded.",
+        "url": "https://gtfs-speedmap.vbhjckfd.workers.dev/",
+        "license": "https://opendatacommons.org/licenses/odbl/",
+        "keywords": [
+          "Lviv",
+          "public transport",
+          "bus speed",
+          "GTFS-RT",
+          "traffic congestion",
+          "open data"
+        ],
+        "spatialCoverage": {
+          "@type": "Place",
+          "name": "Lviv, Ukraine",
+          "geo": {
+            "@type": "GeoShape",
+            "box": "49.70 23.85 49.95 24.20"
+          }
+        },
+        "creator": { "@type": "Person", "name": "Myroslav Holyak" },
+        "isBasedOn": "https://track.ua-gis.com/gtfs/lviv/vehicle_position"
+      }
+    </script>
+
+    <link rel="preload" href="data/index.json" as="fetch" crossorigin="anonymous" />
+    <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin />
+
     <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
   </head>
@@ -29,6 +102,11 @@
         <span>Whole day</span>
       </label>
 
+      <label class="field">
+        <span>Statistic</span>
+        <select id="metric"></select>
+      </label>
+
       <div class="legend">
         <div class="ramp" id="ramp"></div>
         <div class="ramp-labels">
@@ -38,8 +116,41 @@
         </div>
       </div>
 
-      <p class="note" id="note"></p>
+      <p class="note" id="note">
+        Buses only. Positions near a stop on the vehicle's own trip are excluded, so this is
+        running speed.
+      </p>
     </div>
+
+    <!-- Crawlable and screen-reader text; the map itself is a canvas. -->
+    <section class="visually-hidden">
+      <h2>What this map shows</h2>
+      <p>
+        Average running speed of Lviv city buses, aggregated into 25-metre grid cells from
+        GTFS-RT vehicle positions archived every ten seconds. Each dot is one cell: green means
+        buses move quickly there, red means they crawl. Use the hour slider to compare the
+        morning peak against the middle of the night, and the month picker to compare months.
+      </p>
+      <h2>How the figures are produced</h2>
+      <p>
+        Only buses are counted. Lviv trolleybuses are published in the schedule feed as
+        <code>route_type=3</code>, the same code as buses, so they are excluded by route name;
+        trams are excluded by route type. Positions within 40 metres of a stop served by the
+        vehicle's own trip are dropped, which turns dwell time at stops into gaps rather than
+        red dots, while the stop on the opposite side of the street — a different stop served by
+        the other direction — still counts as running road. Vehicles whose own timestamp lags the
+        feed by more than two minutes are discarded as stale, and repeated reports of the same
+        vehicle at the same instant are counted once.
+      </p>
+      <p>
+        Source data: the Lviv public transport GTFS-RT feed, archived to object storage.
+        Basemap: OpenStreetMap.
+      </p>
+    </section>
+
+    <noscript>
+      <p style="padding: 1rem">This map needs JavaScript to draw the speed data.</p>
+    </noscript>
 
     <script src="vendor/leaflet/leaflet.js"></script>
     <script src="app.js"></script>

@@ -9,7 +9,7 @@ import zipfile
 import pytest
 from google.transit import gtfs_realtime_pb2
 
-from speedmap.aggregate import DayStats, accumulate
+from speedmap.aggregate import DayStats, accumulate, in_depot
 from speedmap.grid import cell_of, near_trip_stop
 from speedmap.snapshots import parse_feed
 from speedmap.static_feed import _build
@@ -19,9 +19,11 @@ FEED_TS = 1_786_000_000
 
 # A pair of opposite-direction stops on the same street, offset along it by
 # 70 m — the measured median offset between the two directions of a Lviv route.
+# Both are mid-route, so the wider terminal exclusion does not reach them.
 STOP_NORTH = (49.840000, 24.030000)  # served by direction 0
 STOP_SOUTH = (49.839371, 24.030000)  # served by direction 1 — the opposite side
-STOP_FAR = (49.850000, 24.050000)
+STOP_START = (49.830000, 24.010000)  # first stop of both directions
+STOP_FAR = (49.850000, 24.050000)  # last stop of both directions
 
 
 def _csv(rows: list[dict], header: list[str]) -> str:
@@ -43,15 +45,19 @@ def make_static_zip() -> bytes:
         {"route_id": "R_TRAM", "trip_id": "300_0_0", "direction_id": "0"},
     ]
     stop_times = [
-        {"trip_id": "100_0_0", "stop_id": "N", "stop_sequence": "1"},
-        {"trip_id": "100_0_0", "stop_id": "FAR", "stop_sequence": "2"},
-        {"trip_id": "100_1_1", "stop_id": "S", "stop_sequence": "1"},
+        {"trip_id": "100_0_0", "stop_id": "START", "stop_sequence": "1"},
+        {"trip_id": "100_0_0", "stop_id": "N", "stop_sequence": "2"},
+        {"trip_id": "100_0_0", "stop_id": "FAR", "stop_sequence": "3"},
+        {"trip_id": "100_1_1", "stop_id": "START", "stop_sequence": "1"},
+        {"trip_id": "100_1_1", "stop_id": "S", "stop_sequence": "2"},
+        {"trip_id": "100_1_1", "stop_id": "FAR", "stop_sequence": "3"},
         {"trip_id": "200_0_0", "stop_id": "N", "stop_sequence": "1"},
         {"trip_id": "300_0_0", "stop_id": "S", "stop_sequence": "1"},
     ]
     stops = [
         {"stop_id": "N", "stop_lat": STOP_NORTH[0], "stop_lon": STOP_NORTH[1]},
         {"stop_id": "S", "stop_lat": STOP_SOUTH[0], "stop_lon": STOP_SOUTH[1]},
+        {"stop_id": "START", "stop_lat": STOP_START[0], "stop_lon": STOP_START[1]},
         {"stop_id": "FAR", "stop_lat": STOP_FAR[0], "stop_lon": STOP_FAR[1]},
     ]
 
@@ -87,11 +93,11 @@ def make_feed_bytes(entities: list[dict], feed_ts: int = FEED_TS) -> bytes:
     return msg.SerializeToString()
 
 
-def run(entities, feed, seen=None):
+def run(entities, feed, seen=None, zones=None):
     rows = parse_feed(make_feed_bytes(entities))
     acc: dict = {}
     stats = DayStats()
-    accumulate(rows, feed, acc, seen if seen is not None else set(), stats)
+    accumulate(rows, feed, acc, seen if seen is not None else set(), stats, zones)
     return acc, stats
 
 
@@ -168,13 +174,56 @@ def test_position_at_opposite_side_stop_kept(feed):
 
 def test_unknown_trip_falls_back_to_route_and_direction(feed):
     """May-era trip_ids are gone from the July schedule; direction still holds."""
-    assert feed.stops_for("999_7_0", "R_BUS") == frozenset({"N", "FAR"})
-    assert feed.stops_for("999_7_1", "R_BUS") == frozenset({"S"})
+    assert feed.stops_for("999_7_0", "R_BUS") == frozenset({"START", "N", "FAR"})
+    assert feed.stops_for("999_7_1", "R_BUS") == frozenset({"START", "S", "FAR"})
 
     _, stats = run([{"trip_id": "999_7_0", "route_id": "R_BUS", **AT_NORTH_STOP}], feed)
     assert stats["drop_at_stop"] == 1
 
     _, stats = run([{"trip_id": "999_7_1", "route_id": "R_BUS", **AT_NORTH_STOP}], feed)
+    assert stats["kept"] == 1
+
+
+def test_terminal_exclusion_reaches_further_than_a_normal_stop(feed):
+    """Buses lay over at the end of a run, often standing past the stop."""
+    tx, ty = project_xy(STOP_FAR[1], STOP_FAR[0])
+    own = feed.terminals_for("100_0_0", "R_BUS")
+    assert own == frozenset({"START", "FAR"})
+
+    # 80 m out: past the 40 m stop radius, inside the 120 m terminal radius.
+    assert near_trip_stop(tx + 80.0, ty, own, feed, radius_m=120.0) is True
+    assert near_trip_stop(tx + 80.0, ty, own, feed) is False
+    # 200 m out is running road again.
+    assert near_trip_stop(tx + 200.0, ty, own, feed, radius_m=120.0) is False
+
+
+def test_terminal_dropped_through_the_filter_chain(feed):
+    """A point 80 m from the terminal is dropped, and reported as a terminal."""
+    metres_per_deg_lon = 111_320 * math.cos(math.radians(STOP_FAR[0]))
+    near_terminal = {
+        "lat": STOP_FAR[0],
+        "lon": STOP_FAR[1] + 80.0 / metres_per_deg_lon,
+    }
+    _, stats = run([{"trip_id": "100_0_0", "route_id": "R_BUS", **near_terminal}], feed)
+    assert stats["drop_at_terminal"] == 1
+    assert stats["drop_at_stop"] == 0
+    assert stats["kept"] == 0
+
+
+def test_depot_zone_dropped(feed):
+    """Discovered depots mask out parked buses that no stop rule would catch."""
+    zx, zy = project_xy(MOVING["lon"], MOVING["lat"])
+    zones = [(zx, zy, 100.0**2)]
+
+    assert in_depot(zx + 50.0, zy, zones) is True
+    assert in_depot(zx + 150.0, zy, zones) is False
+
+    _, stats = run([{"trip_id": "100_0_0", "route_id": "R_BUS", **MOVING}], feed, zones=zones)
+    assert stats["drop_depot"] == 1
+    assert stats["kept"] == 0
+
+    # Same point, no depot on file: kept.
+    _, stats = run([{"trip_id": "100_0_0", "route_id": "R_BUS", **MOVING}], feed)
     assert stats["kept"] == 1
 
 

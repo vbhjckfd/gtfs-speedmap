@@ -6,11 +6,19 @@ Positions are projected to UTM 35N so a cell is a true square of
 
 from __future__ import annotations
 
+import math
+
 from .config import BBOX, CELL_SIZE_M, STOP_BUCKET_M, STOP_RADIUS_M
 from .static_feed import StaticFeed
 from .utm import project_xy
 
-_NEIGHBOURS = tuple((dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+
+def _neighbourhood(reach: int) -> tuple[tuple[int, int], ...]:
+    span = range(-reach, reach + 1)
+    return tuple((dx, dy) for dx in span for dy in span)
+
+
+_NEIGHBOURHOODS = {reach: _neighbourhood(reach) for reach in (1, 2, 3)}
 
 
 def in_bbox(lat: float, lon: float) -> bool:
@@ -36,14 +44,15 @@ def near_trip_stop(
     which carries a different stop_id and is served by the opposite direction —
     are ignored, so they never blank out the running lane.
 
-    Requires bucket_m >= radius_m: the 3x3 neighbourhood then covers every stop
-    that could be in range.
+    The bucket sweep widens with the radius, so a terminal's larger exclusion
+    still sees every stop that could be in range.
     """
     bx, by = int(x // bucket_m), int(y // bucket_m)
     buckets = feed.stop_buckets
     stop_xy = feed.stop_xy
     r2_limit = radius_m * radius_m
-    for dx, dy in _NEIGHBOURS:
+    reach = max(1, math.ceil(radius_m / bucket_m))
+    for dx, dy in _NEIGHBOURHOODS.get(reach) or _neighbourhood(reach):
         for stop_id in buckets.get((bx + dx, by + dy), ()):
             if stop_id not in stops:
                 continue

@@ -31,6 +31,8 @@ Every GTFS-RT entity is a candidate; it survives only if all of the following ho
 | `(vehicle_id, timestamp)` not seen before | The collector polls every 10 s and the feed repeats unchanged entities, so a parked bus would otherwise be counted many times over. |
 | Speed in `0 … SPEED_MAX_MPS` | 25 m/s = 90 km/h; above that is GPS noise for a city bus. |
 | Inside the Lviv bbox | Drops stray coordinates. |
+| Not inside a discovered **depot** | Parked buses, not slow traffic. See below. |
+| Not within `TERMINAL_RADIUS_M` of the **first or last stop** of its trip | Layover at the end of a run, where buses often stand well past the stop itself. |
 | **Not within `STOP_RADIUS_M` of a stop on its own trip** | Makes the map show *running* speed instead of dwell time. |
 
 That last filter is the point of the whole thing. The stop set is scoped to the vehicle's own trip —
@@ -40,6 +42,43 @@ median of 70 m apart, so the stop across the street never blanks out the lane ru
 
 Speed is `position.speed` straight from the feed (m/s), which the Lviv feed populates on every
 entity.
+
+## Finding the depots
+
+GTFS publishes stops, not depots or off-street layover yards, and those are where a bus spends
+hours doing nothing. They are mined out of the aggregates instead, by
+[`depots.py`](src/speedmap/depots.py): cells that are motionless (≤ `DEPOT_MAX_KMH`), busy
+(≥ `DEPOT_MIN_SAMPLES`), more than `DEPOT_MIN_DIST_TO_STOP_M` from any stop, and — the part that
+matters — still motionless across at least `DEPOT_MIN_HOURS` *separate hours of the day*. A junction
+that jams at rush hour fails that last test; a yard full of parked buses passes it at 05:00 and at
+23:00 alike. Neighbouring cells are clustered into one site, and the site radius is its observed
+extent plus `DEPOT_PAD_M`.
+
+The run over 85 days found 41 sites holding 2.2M samples. Spot-checking the largest against
+OpenStreetMap: the top two, on Збиральна and Авіаційна streets, are tagged `amenity=parking`.
+
+```bash
+python -m speedmap.depots          # discover, writes data/depots.json
+python -m speedmap.depots --list   # show what is on file
+```
+
+Discovery has to run against aggregates built **without** the mask, or the evidence for the sites
+has already been filtered away — it refuses to overwrite an existing `data/depots.json` unless
+forced, for that reason. The intended order is: ingest, discover, then `ingest-all --force`.
+
+## Average or median
+
+Each day writes two parquets: `data/agg/` keeps the running sums, `data/hist/` keeps a speed
+histogram per cell in `HIST_BIN_KMH` bins. Both statistics ship in the same JSON, so the map's
+Statistic dropdown repaints without refetching, and any other percentile can be added later without
+touching R2 again.
+
+The average is the default: it is time-weighted mean speed, the figure that corresponds to how long
+a journey actually takes. The median ignores the tail of waits at lights and in queues, which makes
+it a better read on free-flow conditions and a worse one on delay. Measured sample counts per cell:
+a single month at a single hour has a median of 5 samples per cell and only 31% of cells at 15 or
+more, so the median is firmest on the all-months views and on busy corridors — the popup shows the
+sample count behind every cell.
 
 ## Setup
 
@@ -74,9 +113,16 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 |---|---|---|
 | `CELL_SIZE_M` | 25 | Dot spacing. Smaller = finer, more cells, bigger JSON. |
 | `STOP_RADIUS_M` | 40 | How much road either side of a stop is treated as dwell. |
+| `TERMINAL_RADIUS_M` | 120 | The same, for the first and last stop of a trip. |
 | `STALE_MAX_S` | 120 | Ghost-entity cutoff. |
 | `SPEED_MAX_MPS` | 25 | Upper sanity bound. |
 | `MIN_SAMPLES` | 5 | Cells with fewer samples are not published. |
+| `HIST_BIN_KMH` | 1 | Histogram resolution, and so the median's resolution. |
+| `DEPOT_MAX_KMH` | 4 | How slow a cell must be to be depot-like. |
+| `DEPOT_MIN_SAMPLES` | 300 | How busy. |
+| `DEPOT_MIN_HOURS` | 10 | In how many separate hours — what separates a yard from a jam. |
+| `DEPOT_MIN_DIST_TO_STOP_M` | 120 | How far from any stop, so dwell is not mistaken for parking. |
+| `DEPOT_PAD_M` | 40 | Grown onto each site's observed extent. |
 | `SCALE_LOW_KMH` / `SCALE_HIGH_KMH` | 5 / 35 | Colour ramp ends. Measured cell speeds: p25 ≈ 13, p50 ≈ 21, p90 ≈ 41 km/h. |
 
 Changing a filter means re-running `make ingest-all --force`; changing `MIN_SAMPLES` or the colour
@@ -84,9 +130,8 @@ scale only needs `make build`.
 
 ## Known artefacts
 
-- Dense red clusters appear at depots and terminal layovers (e.g. near Skniliv). Those buses are
-  stationary but not near a stop of their trip, so they pass every filter. They are real
-  observations, just not congestion.
+- A depot that opened after the aggregates were last mined will show up as a red knot until
+  `python -m speedmap.depots` is run again on unmasked data.
 - Hours 00:00–04:00 are absent: the collector does not poll then.
 - `static/` archives only start 2026-07-31, so earlier days are matched against the oldest archive.
   About 35% of May trip_ids no longer exist there, which is what the route+direction fallback covers.
