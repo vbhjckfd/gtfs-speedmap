@@ -195,6 +195,23 @@ function writeUrl() {
   history.replaceState(null, "", `?${params}`);
 }
 
+// The hour bins are local to the feed's city, so "now" means now *there* —
+// a visitor in another timezone still lands on the hour Lviv is living.
+function currentHour() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: index.timezone,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((p) => p.type === "hour").value);
+  // The collector sleeps 00:00–04:00, so those hours have no data at all;
+  // land on the nearest hour that does.
+  return index.hours.reduce(
+    (best, h) => (Math.abs(h - hour) < Math.abs(best - hour) ? h : best),
+    index.hours[0],
+  );
+}
+
 function readUrl() {
   const params = new URLSearchParams(location.search);
 
@@ -341,7 +358,7 @@ async function boot() {
   const hours = index.hours;
   els.hour.min = String(hours[0]);
   els.hour.max = String(hours[hours.length - 1]);
-  els.hour.value = String(hours.includes(8) ? 8 : hours[0]);
+  els.hour.value = String(currentHour());
 
   readUrl();
   paintLegend();
