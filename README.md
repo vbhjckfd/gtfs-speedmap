@@ -48,23 +48,33 @@ entity.
 GTFS publishes stops, not depots or off-street layover yards, and those are where a bus spends
 hours doing nothing. They are mined out of the aggregates instead, by
 [`depots.py`](src/speedmap/depots.py): cells that are motionless (≤ `DEPOT_MAX_KMH`), busy
-(≥ `DEPOT_MIN_SAMPLES`), more than `DEPOT_MIN_DIST_TO_STOP_M` from any stop, and — the part that
-matters — still motionless across at least `DEPOT_MIN_HOURS` *separate hours of the day*. A junction
-that jams at rush hour fails that last test; a yard full of parked buses passes it at 05:00 and at
-23:00 alike. Neighbouring cells are clustered into one site, and the site radius is its observed
-extent plus `DEPOT_PAD_M`.
+(≥ `DEPOT_MIN_SAMPLES`), more than `DEPOT_MIN_DIST_TO_STOP_M` from any **mid-route** stop, and — the
+part that matters — still motionless across at least `DEPOT_MIN_HOURS` *separate hours of the day*.
+A junction that jams at rush hour fails that last test; a yard full of parked buses passes it at
+05:00 and at 23:00 alike. Neighbouring cells are clustered into one site, and the site radius is its
+observed extent plus `DEPOT_PAD_M`.
 
-The run over 85 days found 41 sites holding 2.2M samples. Spot-checking the largest against
-OpenStreetMap: the top two, on Збиральна and Авіаційна streets, are tagged `amenity=parking`.
+Terminal stops deliberately do not shield a cell from being called a depot. The layover sprawls
+past the terminal stop by more than any fixed radius covers: the forecourt of the Двірцевий bus
+station, the far end of Городоцька, and the ends of the Рясне-2, Голоско, Сихів and Ряшівська routes
+all sit at 0–1.5 km/h for fifteen-plus hours a day. Requiring distance from *every* stop hid exactly
+the sites worth finding. Dwell at an ordinary stop is already handled by `STOP_RADIUS_M`.
+
+Over 88 days this finds **73 sites holding ~4M samples**. Spot-checked against OpenStreetMap, they
+are what they claim to be: the two largest are tagged `amenity=parking` (Збиральна, Авіаційна), and
+the rest are route termini and the bus station.
 
 ```bash
-python -m speedmap.depots          # discover, writes data/depots.json
-python -m speedmap.depots --list   # show what is on file
+python -m speedmap.depots           # discover, writes data/depots.json
+python -m speedmap.depots --list    # show what is on file
+python -m speedmap.depots --merge   # keep known sites, add newly found ones
 ```
 
-Discovery has to run against aggregates built **without** the mask, or the evidence for the sites
-has already been filtered away — it refuses to overwrite an existing `data/depots.json` unless
-forced, for that reason. The intended order is: ingest, discover, then `ingest-all --force`.
+Discovery has to run against aggregates built **without** the mask, or the evidence for a site has
+already been filtered away — plain `discover` refuses to overwrite an existing `data/depots.json`
+for that reason. Use `--merge` to widen the mask from already-masked aggregates: it keeps every
+known site and adds only what the new pass turns up. The order is: ingest, discover, then
+`ingest-all --force`.
 
 ## Average or median
 

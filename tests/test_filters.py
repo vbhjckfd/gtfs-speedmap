@@ -6,6 +6,7 @@ import io
 import math
 import zipfile
 
+import pandas as pd
 import pytest
 from google.transit import gtfs_realtime_pb2
 
@@ -225,6 +226,30 @@ def test_depot_zone_dropped(feed):
     # Same point, no depot on file: kept.
     _, stats = run([{"trip_id": "100_0_0", "route_id": "R_BUS", **MOVING}], feed)
     assert stats["kept"] == 1
+
+
+def test_depot_discovery_is_shielded_by_mid_route_stops_only(feed):
+    """A yard at a terminus must stay discoverable; dwell at a stop must not.
+
+    Layovers sprawl past the terminal stop, so terminals cannot be allowed to
+    hide a candidate — that is what kept the bus station forecourt and the end
+    of Horodotska out of the mask.
+    """
+    from speedmap.depots import _away_from_stops
+
+    candidates = pd.DataFrame(
+        {
+            "cx": [0, 1],
+            "cy": [0, 1],
+            # 60 m from a mid-route stop, and 60 m from a terminal.
+            "lat": [STOP_NORTH[0] + 60 / 111_320, STOP_FAR[0] + 60 / 111_320],
+            "lon": [STOP_NORTH[1], STOP_FAR[1]],
+            "n": [1000, 1000],
+        }
+    )
+    kept = _away_from_stops(candidates, feed)
+
+    assert list(kept["cx"]) == [1], "only the terminal-side candidate survives"
 
 
 def test_speed_and_bbox_gates(feed):

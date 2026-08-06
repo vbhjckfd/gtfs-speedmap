@@ -11,6 +11,7 @@ an exclusion mask.
 
 Run: python -m speedmap.depots            (discover and write)
      python -m speedmap.depots --list     (show what is on file)
+     python -m speedmap.depots --merge    (keep known sites, add new ones)
 """
 
 from __future__ import annotations
@@ -69,11 +70,25 @@ def _stationary_cells(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _away_from_stops(cells: pd.DataFrame, feed) -> pd.DataFrame:
-    """Drop candidates near any bus stop — those are dwell, not a depot."""
+    """Drop candidates near a **mid-route** stop — those are dwell, not parking.
+
+    Terminal stops deliberately do not shield a cell. Layover yards sit right
+    at the end of a route, well outside any fixed radius around the terminal
+    stop: the forecourt of the Двірцевий bus station and the far end of
+    Городоцька both hold buses at 0-1 km/h for fifteen hours a day. Requiring
+    distance from *every* stop hid exactly those, which are the ones worth
+    finding. Dwell at an ordinary stop is already handled by STOP_RADIUS_M.
+    """
+    terminals: set[str] = set()
+    for group in feed.terminal_sets:
+        terminals |= group
+
     bucket = max(DEPOT_MIN_DIST_TO_STOP_M, 100.0)
     reach = math.ceil(DEPOT_MIN_DIST_TO_STOP_M / bucket)
     index: dict[tuple[int, int], list[tuple[float, float]]] = defaultdict(list)
-    for sx, sy in feed.stop_xy.values():
+    for stop_id, (sx, sy) in feed.stop_xy.items():
+        if stop_id in terminals:
+            continue
         index[(int(sx // bucket), int(sy // bucket))].append((sx, sy))
 
     limit = DEPOT_MIN_DIST_TO_STOP_M**2
@@ -144,15 +159,35 @@ def _cluster(cells: pd.DataFrame) -> list[dict]:
     return sites
 
 
-def discover(force: bool = False) -> list[dict]:
+def _merge(existing: list[dict], found: list[dict]) -> list[dict]:
+    """Keep known sites, add newly found ones that are not already covered."""
+    merged = list(existing)
+    for site in found:
+        x, y = project_xy(site["lon"], site["lat"])
+        covered = False
+        for known in existing:
+            kx, ky = project_xy(known["lon"], known["lat"])
+            if math.hypot(kx - x, ky - y) <= known["radius_m"]:
+                covered = True
+                break
+        if not covered:
+            merged.append(site)
+    merged.sort(key=lambda s: -s["samples"])
+    return merged
+
+
+def discover(force: bool = False, merge: bool = False) -> list[dict]:
     # Discovery must see *un-masked* aggregates: once aggregate.py starts
     # excluding these sites, the evidence for them is gone from the parquets,
     # and re-running discovery on masked data would quietly empty the file.
-    if DEPOT_FILE.exists() and not force:
+    # --merge is the way to widen the mask without a bare re-ingest first: it
+    # keeps what is on file and only adds what the current pass turns up.
+    existing = load_sites() if merge else []
+    if DEPOT_FILE.exists() and not force and not merge:
         raise SystemExit(
             f"{DEPOT_FILE} already exists. The aggregates on disk were probably built with it "
-            "as a mask, so re-discovering from them would lose sites. Pass --force only after "
-            "`make ingest-all --force` was run with the depot file moved aside."
+            "as a mask, so re-discovering from them would lose sites. Pass --merge to keep the "
+            "known sites and add any new ones, or --force to replace the file outright."
         )
 
     paths = sorted(AGG_DIR.glob("*.parquet"))
@@ -162,7 +197,10 @@ def discover(force: bool = False) -> list[dict]:
 
     feed = load_for_date(r2.make_client(), paths[-1].stem)
     candidates = _away_from_stops(_stationary_cells(df), feed)
-    sites = _cluster(candidates)
+    found = _cluster(candidates)
+    sites = _merge(existing, found) if merge else found
+    if merge:
+        print(f"{len(existing)} known + {len(found)} found → {len(sites)} after merge")
 
     DEPOT_FILE.parent.mkdir(parents=True, exist_ok=True)
     DEPOT_FILE.write_text(
@@ -195,9 +233,11 @@ def load_sites() -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list", action="store_true", help="print the sites already on file")
+    ap.add_argument("--merge", action="store_true", help="add new sites, keep the known ones")
+    ap.add_argument("--force", action="store_true", help="replace the file outright")
     args = ap.parse_args(argv)
 
-    sites = load_sites() if args.list else discover()
+    sites = load_sites() if args.list else discover(force=args.force, merge=args.merge)
     total = sum(s["samples"] for s in sites)
     print(f"{len(sites)} site(s), {total:,} samples inside them")
     for site in sites[:20]:
