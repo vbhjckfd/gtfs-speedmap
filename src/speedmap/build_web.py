@@ -20,6 +20,8 @@ from datetime import date
 
 import pandas as pd
 
+from .depots import load_sites
+from .utm import project_xy
 from .config import (
     AGG_DIR,
     CELL_SIZE_M,
@@ -95,6 +97,30 @@ def _medians(bins: pd.DataFrame) -> pd.Series:
     return (first + 0.5) * HIST_BIN_KMH
 
 
+def _masked_cells(cells: pd.DataFrame) -> pd.Series:
+    """True for cells sitting inside a discovered depot or layover zone.
+
+    aggregate.py already drops these samples, so this only matters when a zone
+    was added after the last ingest — it makes a widened mask show up in the
+    map immediately, instead of after another pass over R2.
+    """
+    sites = load_sites()
+    if not sites or cells.empty:
+        return pd.Series(False, index=cells.index)
+
+    xy = [project_xy(lon, lat) for lat, lon in zip(cells["lat"], cells["lon"])]
+    inside = []
+    for x, y in xy:
+        hit = False
+        for site in sites:
+            sx, sy = project_xy(site["lon"], site["lat"])
+            if (sx - x) ** 2 + (sy - y) ** 2 <= site["radius_m"] ** 2:
+                hit = True
+                break
+        inside.append(hit)
+    return pd.Series(inside, index=cells.index)
+
+
 def _payload(group: pd.DataFrame, bins: pd.DataFrame) -> dict:
     """Collapse one (month, hour) selection to parallel arrays, ordered by
     sample count so the busiest cells are drawn last and stay on top."""
@@ -103,7 +129,10 @@ def _payload(group: pd.DataFrame, bins: pd.DataFrame) -> dict:
         .sum()
         .reset_index()
     )
-    cells = cells[cells["n"] >= MIN_SAMPLES].sort_values("n")
+    cells = cells[cells["n"] >= MIN_SAMPLES]
+    cells["lat"] = cells["sum_lat"] / cells["n"]
+    cells["lon"] = cells["sum_lon"] / cells["n"]
+    cells = cells[~_masked_cells(cells)].sort_values("n")
     if cells.empty:
         return {"lat": [], "lon": [], "v": [], "med": [], "n": []}
 
@@ -117,8 +146,8 @@ def _payload(group: pd.DataFrame, bins: pd.DataFrame) -> dict:
 
     n = cells["n"].to_numpy()
     return {
-        "lat": (cells["sum_lat"].to_numpy() / n).round(5).tolist(),
-        "lon": (cells["sum_lon"].to_numpy() / n).round(5).tolist(),
+        "lat": cells["lat"].to_numpy().round(5).tolist(),
+        "lon": cells["lon"].to_numpy().round(5).tolist(),
         "v": (cells["sum_speed"].to_numpy() / n * MPS_TO_KMH).round(1).tolist(),
         "med": med_values,
         "n": n.astype(int).tolist(),

@@ -2,7 +2,15 @@
 name = "gtfs-speedmap"
 version = "0.1.0"
 description = "Average bus speed map for Lviv, built from archived GTFS-RT vehicle positions"
+readme = "README.md"
+license = "WTFPL"
+license-files = ["LICENSE"]
+authors = [{ name = "Myroslav Holyak" }]
 requires-python = ">=3.11"
+
+[project.urls]
+Homepage = "https://gtfs-speedmap.vbhjckfd.workers.dev/"
+Repository = "https://github.com/vbhjckfd/gtfs-speedmap"
 dependencies = [
     "boto3>=1.34",
     "gtfs-realtime-bindings>=1.0",

@@ -54,13 +54,15 @@ A junction that jams at rush hour fails that last test; a yard full of parked bu
 05:00 and at 23:00 alike. Neighbouring cells are clustered into one site, and the site radius is its
 observed extent plus `DEPOT_PAD_M`.
 
-Terminal stops deliberately do not shield a cell from being called a depot. The layover sprawls
-past the terminal stop by more than any fixed radius covers: the forecourt of the Двірцевий bus
-station, the far end of Городоцька, and the ends of the Рясне-2, Голоско, Сихів and Ряшівська routes
-all sit at 0–1.5 km/h for fifteen-plus hours a day. Requiring distance from *every* stop hid exactly
-the sites worth finding. Dwell at an ordinary stop is already handled by `STOP_RADIUS_M`.
+Terminal stops deliberately do not shield a cell from being called a depot, and only the **nearest**
+stop is consulted. The layover sprawls past the terminal stop by more than any fixed radius covers:
+the forecourt of the Двірцевий bus station, the far end of Городоцька, and the ends of the Рясне-2,
+Голоско, Сихів and Ряшівська routes all sit at 0–1.5 km/h for fifteen-plus hours a day. Requiring
+distance from *every* stop hid exactly the sites worth finding — one terminus stayed hidden even
+after that was fixed, because an unrelated route's ordinary stop happened to sit 102 m away. Dwell
+at an ordinary stop is already handled by `STOP_RADIUS_M`.
 
-Over 88 days this finds **73 sites holding ~4M samples**. Spot-checked against OpenStreetMap, they
+Over 88 days this finds **78 sites holding ~4.4M samples**. Spot-checked against OpenStreetMap, they
 are what they claim to be: the two largest are tagged `amenity=parking` (Збиральна, Авіаційна), and
 the rest are route termini and the bus station.
 
@@ -75,6 +77,12 @@ already been filtered away — plain `discover` refuses to overwrite an existing
 for that reason. Use `--merge` to widen the mask from already-masked aggregates: it keeps every
 known site and adds only what the new pass turns up. The order is: ingest, discover, then
 `ingest-all --force`.
+
+The mask is applied twice: `aggregate.py` drops the samples at ingest, and `build_web.py` drops
+whole cells that land inside a zone. The second pass is what makes a widened mask visible after a
+`make build` of a few seconds, instead of another couple of hours over R2. Re-ingesting afterwards
+is still worth doing — it also clears those samples out of neighbouring cells' histograms — but it
+is no longer the thing standing between a fix and a deploy.
 
 ## Average or median
 
@@ -131,12 +139,26 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 | `DEPOT_MAX_KMH` | 4 | How slow a cell must be to be depot-like. |
 | `DEPOT_MIN_SAMPLES` | 300 | How busy. |
 | `DEPOT_MIN_HOURS` | 10 | In how many separate hours — what separates a yard from a jam. |
-| `DEPOT_MIN_DIST_TO_STOP_M` | 120 | How far from any stop, so dwell is not mistaken for parking. |
+| `DEPOT_MIN_DIST_TO_STOP_M` | 120 | How far the nearest mid-route stop must be, so dwell is not mistaken for parking. |
 | `DEPOT_PAD_M` | 40 | Grown onto each site's observed extent. |
 | `SCALE_LOW_KMH` / `SCALE_HIGH_KMH` | 5 / 35 | Colour ramp ends. Measured cell speeds: p25 ≈ 13, p50 ≈ 21, p90 ≈ 41 km/h. |
 
 Changing a filter means re-running `make ingest-all --force`; changing `MIN_SAMPLES` or the colour
 scale only needs `make build`.
+
+## Sharing a view
+
+The month, hour and statistic live in the query string, so any view can be linked:
+
+```
+https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&hour=08&stat=med
+```
+
+`month` takes `all` or `YYYY-MM`, `hour` takes `all` or `00`–`23`, `stat` takes `v` (average) or
+`med` (median). Anything unrecognised falls back to the default rather than erroring. The canonical
+link stays on the bare homepage on purpose — one page for search engines to index, not a hundred
+near-identical ones. Slider moves use `replaceState`, so dragging it does not bury the previous page
+under twenty history entries.
 
 ## Known artefacts
 
@@ -145,3 +167,15 @@ scale only needs `make build`.
 - Hours 00:00–04:00 are absent: the collector does not poll then.
 - `static/` archives only start 2026-07-31, so earlier days are matched against the oldest archive.
   About 35% of May trip_ids no longer exist there, which is what the route+direction fallback covers.
+
+## Licence
+
+[WTFPL](LICENSE). Do what the fuck you want to.
+
+The data behind it is not mine to relicense: vehicle positions come from the Lviv operator's
+GTFS-RT feed, and the basemap is © OpenStreetMap contributors.
+
+## Contact
+
+[github.com/vbhjckfd/gtfs-speedmap](https://github.com/vbhjckfd/gtfs-speedmap) — issues and pull
+requests welcome.

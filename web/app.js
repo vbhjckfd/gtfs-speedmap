@@ -179,6 +179,43 @@ function selectionKey() {
   return `${month}-${hour}`;
 }
 
+/* ---------- shareable URL ---------- */
+
+// The selection lives in the query string so a view can be linked. The
+// canonical link stays on the bare homepage, so search engines index one page
+// rather than a hundred near-identical ones.
+function writeUrl() {
+  const params = new URLSearchParams({
+    month: els.month.value,
+    hour: els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0"),
+    stat: els.metric.value,
+  });
+  // replaceState, not pushState: dragging the slider must not bury the user's
+  // previous page under twenty history entries.
+  history.replaceState(null, "", `?${params}`);
+}
+
+function readUrl() {
+  const params = new URLSearchParams(location.search);
+
+  const month = params.get("month");
+  if (month && [...els.month.options].some((o) => o.value === month)) {
+    els.month.value = month;
+  }
+
+  const hour = params.get("hour");
+  if (hour === "all") {
+    els.allHours.checked = true;
+  } else if (hour !== null && index.hours.includes(Number(hour))) {
+    els.hour.value = String(Number(hour));
+  }
+
+  const stat = params.get("stat");
+  if (stat && [...els.metric.options].some((o) => o.value === stat)) {
+    els.metric.value = stat;
+  }
+}
+
 async function fetchSelection(key) {
   if (CACHE.has(key)) return CACHE.get(key);
   const promise = fetch(`${DATA}/${key}.json`)
@@ -217,6 +254,7 @@ function describe(count) {
 async function render() {
   const key = selectionKey();
   const seq = ++requestSeq;
+  writeUrl();
   try {
     const payload = await fetchSelection(key);
     if (seq !== requestSeq) return; // a newer selection won
@@ -305,6 +343,7 @@ async function boot() {
   els.hour.max = String(hours[hours.length - 1]);
   els.hour.value = String(hours.includes(8) ? 8 : hours[0]);
 
+  readUrl();
   paintLegend();
   syncHourLabel();
   els.note.textContent =
@@ -327,6 +366,7 @@ async function boot() {
   });
   // Every statistic is already in the loaded payload, so this is a repaint.
   els.metric.addEventListener("change", () => {
+    writeUrl();
     dots.redraw();
     if (current) els.subtitle.textContent = describe(current.lat.length);
   });

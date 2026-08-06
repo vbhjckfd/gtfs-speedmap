@@ -85,29 +85,31 @@ def _away_from_stops(cells: pd.DataFrame, feed) -> pd.DataFrame:
 
     bucket = max(DEPOT_MIN_DIST_TO_STOP_M, 100.0)
     reach = math.ceil(DEPOT_MIN_DIST_TO_STOP_M / bucket)
-    index: dict[tuple[int, int], list[tuple[float, float]]] = defaultdict(list)
+    index: dict[tuple[int, int], list[tuple[float, float, bool]]] = defaultdict(list)
     for stop_id, (sx, sy) in feed.stop_xy.items():
-        if stop_id in terminals:
-            continue
-        index[(int(sx // bucket), int(sy // bucket))].append((sx, sy))
+        index[(int(sx // bucket), int(sy // bucket))].append((sx, sy, stop_id in terminals))
 
     limit = DEPOT_MIN_DIST_TO_STOP_M**2
     keep = []
     for lat, lon in zip(cells["lat"], cells["lon"]):
         x, y = project_xy(lon, lat)
         bx, by = int(x // bucket), int(y // bucket)
-        near = False
+
+        # What matters is the *nearest* stop, not merely whether some mid-route
+        # stop happens to be in range. A terminus 70 m away with another
+        # route's ordinary stop 100 m away is still a terminus, and the layover
+        # that fills it was being hidden by that second stop.
+        nearest = limit
+        nearest_is_terminal = False
         for dx in range(-reach, reach + 1):
             for dy in range(-reach, reach + 1):
-                for sx, sy in index.get((bx + dx, by + dy), ()):
-                    if (sx - x) ** 2 + (sy - y) ** 2 <= limit:
-                        near = True
-                        break
-                if near:
-                    break
-            if near:
-                break
-        keep.append(not near)
+                for sx, sy, is_terminal in index.get((bx + dx, by + dy), ()):
+                    d2 = (sx - x) ** 2 + (sy - y) ** 2
+                    if d2 < nearest:
+                        nearest = d2
+                        nearest_is_terminal = is_terminal
+        shielded = nearest < limit and not nearest_is_terminal
+        keep.append(not shielded)
     return cells[pd.Series(keep, index=cells.index)]
 
 
