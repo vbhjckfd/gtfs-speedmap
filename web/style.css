@@ -162,10 +162,47 @@ input[type="range"] {
 
 .cell-popup {
   font-variant-numeric: tabular-nums;
+  min-width: 190px;
 }
 
 .cell-popup b {
-  font-size: 15px;
+  font-size: 17px;
+}
+
+.stat-label {
+  margin-bottom: 7px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 12px;
+  font-size: 12px;
+}
+
+.stats span:nth-child(odd) {
+  color: var(--muted);
+}
+
+.spark-slot {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.spark {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.spark-tick {
+  font-size: 9px;
+  fill: var(--muted);
 }
 
 @media (max-width: 560px) {

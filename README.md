@@ -1,20 +1,22 @@
 # gtfs-speedmap
 
-An OSM map of **average bus speed** in Lviv, one dot per 25 m cell, coloured green (fast) to red
-(slow), with an hour-of-day slider and a month picker.
+An OSM map of **bus running speed** in Lviv, one dot per 25 m cell, coloured green (fast) to red
+(slow), with an hour-of-day slider, a month picker and a weekday/weekend split.
 
 Built from the GTFS-RT vehicle-position snapshots that
 [`gtfs-collector`](../gtfs-collector) archives to Cloudflare R2.
 
 ```
-R2  raw/YYYY-MM-DD/*.pb          GTFS-RT snapshots, every ~10 s
-R2  static/YYYY-MM-DD/static.zip GTFS schedule as archived that day
+R2  raw/YYYY-MM-DD/*.pb           GTFS-RT snapshots, every ~10 s
+R2  static/YYYY-MM-DD/static.zip  GTFS schedule as archived that day
         │  python -m speedmap.aggregate --all
         ▼
-data/agg/YYYY-MM-DD.parquet      per-day sums, keyed (month, hour, cell)
+data/agg/YYYY-MM-DD.parquet       per-day sums, keyed (month, hour, cell)
+data/hist/YYYY-MM-DD.parquet      per-day speed histograms, same key + bin
+        │  python -m speedmap.sync push     ⇄  R2 derived/{agg,hist}/
         │  python -m speedmap.build_web
         ▼
-web/data/{month}-{hour}.json     what the map fetches
+web/data/{month}-{days}-{hour}.json   what the map fetches
         │  make deploy
         ▼
 Cloudflare Worker (assets-only)
@@ -84,19 +86,71 @@ whole cells that land inside a zone. The second pass is what makes a widened mas
 is still worth doing — it also clears those samples out of neighbouring cells' histograms — but it
 is no longer the thing standing between a fix and a deploy.
 
-## Average or median
+## Weekdays and weekends
+
+Averaging the whole week together hides the rush hour. City-wide mean speed, km/h:
+
+| hour | weekday | Sat | Sun |
+|---|---|---|---|
+| 07 | 20.6 | 22.7 | 23.3 |
+| 08 | 18.4 | 21.9 | 22.7 |
+| 12 | 18.1 | 19.1 | 20.6 |
+| 17 | **16.6** | 21.1 | **21.4** |
+| 22 | 28.2 | 27.4 | 28.6 |
+
+Without the split, 17:00 is a blend of a 16.6 km/h jam and a 21.4 km/h empty street. Saturday and
+Sunday differ by at most 1.5 km/h at any hour, against a 4–5 km/h weekday gap, so they share one
+"weekend" bucket rather than thinning the data three ways.
+
+The day type comes from the aggregate's filename, and the histograms already hold the full
+distribution, so none of this needed another pass over R2 — `build_web.py` reads the same parquets
+and buckets them differently.
+
+## Which statistic
 
 Each day writes two parquets: `data/agg/` keeps the running sums, `data/hist/` keeps a speed
-histogram per cell in `HIST_BIN_KMH` bins. Both statistics ship in the same JSON, so the map's
-Statistic dropdown repaints without refetching, and any other percentile can be added later without
-touching R2 again.
+histogram per cell in `HIST_BIN_KMH` bins. Every statistic ships in the same JSON, so the Statistic
+dropdown repaints without refetching.
 
-The average is the default: it is time-weighted mean speed, the figure that corresponds to how long
-a journey actually takes. The median ignores the tail of waits at lights and in queues, which makes
-it a better read on free-flow conditions and a worse one on delay. Measured sample counts per cell:
-a single month at a single hour has a median of 5 samples per cell and only 31% of cells at 15 or
-more, so the median is firmest on the all-months views and on busy corridors — the popup shows the
-sample count behind every cell.
+| Statistic | What it answers |
+|---|---|
+| Average | Time-weighted mean — the figure that matches how long a journey takes. |
+| Median | Ignores the tail of waits at lights; a better read on conditions, a worse one on delay. |
+| Slow day (p15) / Fast day (p85) | The bad and good ends of the same distribution. |
+| Unreliability (p85 − p15) | How unpredictable a stretch is, which is not the same as how slow. |
+| **% of free-flow** | Median over that cell's *own* p85 across the whole archive. |
+
+The last one is the reason the others are not enough. Absolute speed tells you where the road is
+slow; it cannot tell you where there is congestion. Measured across the archive, a cell's median
+speed and its share of its own free-flow correlate at **r = 0.07** — they are very nearly
+independent. A narrow old-town lane doing 20 km/h at 03:00 is not congested; a ring road down to
+22 km/h from 40 is. The reference is global on purpose: derive it per selection and the colours
+shift meaninglessly as the slider moves. Cells whose reference is under `REL_MIN_FF_KMH` report
+nothing, because a ratio against a 5 km/h free-flow is noise over noise.
+
+Sample counts per cell: a single month at a single hour has a median of 5 samples and only 31% of
+cells at 15 or more, so the percentiles are firmest on the all-months views and on busy corridors —
+the popup shows the sample count behind every cell, alongside its speed hour by hour.
+
+## Keeping it current
+
+`data/` is git-ignored, so a CI runner starts with nothing and would re-read the whole bucket. The
+derived parquets go back to R2 under `derived/agg/` and `derived/hist/` instead; they are immutable
+once written, so syncing either way is a filename comparison.
+
+```bash
+make pull     # download aggregates missing locally
+make push     # upload aggregates missing remotely
+make update   # pull, ingest new days, push, rebuild, deploy
+```
+
+[`.github/workflows/update.yml`](.github/workflows/update.yml) runs that daily at 03:20 UTC, after
+midnight in Kyiv so the previous local day is complete. It needs six repository secrets —
+`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `CLOUDFLARE_API_TOKEN`,
+`CLOUDFLARE_ACCOUNT_ID` — and fails loudly without them.
+
+The first run with an empty `derived/` prefix re-ingests the whole archive (a couple of hours) and
+then pushes it, so every later run is minutes. Running `make push` locally once gets there sooner.
 
 ## Setup
 
@@ -135,7 +189,11 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 | `STALE_MAX_S` | 120 | Ghost-entity cutoff. |
 | `SPEED_MAX_MPS` | 25 | Upper sanity bound. |
 | `MIN_SAMPLES` | 5 | Cells with fewer samples are not published. |
-| `HIST_BIN_KMH` | 1 | Histogram resolution, and so the median's resolution. |
+| `HIST_BIN_KMH` | 1 | Histogram resolution, and so every percentile's resolution. |
+| `FREE_FLOW_Q` | 0.85 | Which percentile counts as a cell's free-flow reference. |
+| `REL_MIN_FF_KMH` | 8 | Below this reference speed, "% of free-flow" reports nothing. |
+| `PROFILE_MIN_SAMPLES` | 3 | Per-hour floor for the popup sparkline (see below). |
+| `PROFILE_MIN_HOURS` | 6 | Cells measured in fewer hours get no sparkline at all. |
 | `DEPOT_MAX_KMH` | 4 | How slow a cell must be to be depot-like. |
 | `DEPOT_MIN_SAMPLES` | 300 | How busy. |
 | `DEPOT_MIN_HOURS` | 10 | In how many separate hours — what separates a yard from a jam. |
@@ -143,22 +201,33 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 | `DEPOT_PAD_M` | 40 | Grown onto each site's observed extent. |
 | `SCALE_LOW_KMH` / `SCALE_HIGH_KMH` | 5 / 35 | Colour ramp ends. Measured cell speeds: p25 ≈ 13, p50 ≈ 21, p90 ≈ 41 km/h. |
 
-Changing a filter means re-running `make ingest-all --force`; changing `MIN_SAMPLES` or the colour
-scale only needs `make build`.
+Changing a filter means re-running `make ingest-all --force`; changing `MIN_SAMPLES`, a percentile
+or the colour scale only needs `make build`.
+
+`PROFILE_MIN_SAMPLES` is lower than `MIN_SAMPLES` because the sparkline splits a cell 19 ways: at
+the map's own floor, half of all cells end up with three bars or fewer, which reads as "no buses ran
+at 14:00" rather than "not measured". Dropping the floor to 3 lifts the median cell from 6 populated
+hours to 9, and cells that still cannot fill `PROFILE_MIN_HOURS` get no sparkline — a two-bar chart
+misleads more than it tells.
 
 ## Sharing a view
 
-The month, hour and statistic live in the query string, so any view can be linked:
+The whole selection lives in the query string, viewport included, so a link can point at one
+junction rather than the whole city:
 
 ```
-https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&hour=08&stat=med
+https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=rel&z=16&lat=49.8408&lon=24.0219
 ```
 
-`month` takes `all` or `YYYY-MM`, `hour` takes `all` or `00`–`23`, `stat` takes `v` (average) or
-`med` (median). Anything unrecognised falls back to the default rather than erroring. The canonical
-link stays on the bare homepage on purpose — one page for search engines to index, not a hundred
-near-identical ones. Slider moves use `replaceState`, so dragging it does not bury the previous page
-under twenty history entries.
+`month` takes `all` or `YYYY-MM`; `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
+`stat` takes `v`, `med`, `p15`, `p85`, `spread` or `rel`. Anything unrecognised falls back to the
+default rather than erroring, and a link written before an axis existed still opens — `days`
+defaults to `all`. The canonical link stays on the bare homepage on purpose — one page for search
+engines to index, not a thousand near-identical ones. Slider moves and pans use `replaceState`, so
+dragging does not bury the previous page under twenty history entries.
+
+With no query string at all, the map opens on the current hour **in Kyiv**, not the visitor's own
+timezone, clamped to the nearest hour the collector actually polls.
 
 ## Known artefacts
 

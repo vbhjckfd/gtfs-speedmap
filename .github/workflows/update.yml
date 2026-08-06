@@ -1,0 +1,59 @@
+name: update
+
+# A stale map is a dead map: the collector keeps archiving, so without this the
+# site drifts further behind every day until someone runs `make update` by hand.
+on:
+  schedule:
+    # 03:20 UTC — after midnight in Kyiv, so the previous local day is complete.
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # Two runs ingesting the same day would just duplicate ~330 MB of transfer.
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    # Ingest is bounded by R2 round-trips, not CPU; a normal day is minutes, but
+    # a first run with an empty derived/ prefix re-reads the whole archive.
+    timeout-minutes: 180
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: pip install -e .
+
+      # Aggregates live in R2, not in git, so this is what makes the run cheap:
+      # everything already ingested comes back and `ingest-all` skips it.
+      - name: Pull aggregates
+        run: make pull
+
+      - name: Ingest new days
+        run: make ingest-all
+
+      - name: Push aggregates
+        run: make push
+
+      - name: Build
+        run: make build
+
+      - name: Deploy
+        run: npx --yes wrangler@4 deploy

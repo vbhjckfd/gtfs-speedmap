@@ -7,7 +7,7 @@
     <title>Lviv bus speeds — average speed by hour and month, mapped</title>
     <meta
       name="description"
-      content="Where Lviv's buses actually run fast and where they crawl. Average speed per 25 m of street, from millions of archived GTFS-RT positions, with an hour-of-day slider and a month picker. Stops excluded, so it shows running speed."
+      content="Where Lviv's buses actually run fast and where they crawl. Speed per 25 m of street, from millions of archived GTFS-RT positions, with an hour-of-day slider, a month picker and a weekday/weekend split. Shows average, median, percentiles, and speed as a share of each street's own free-flow. Stops excluded, so it shows running speed."
     />
     <link rel="canonical" href="https://gtfs-speedmap.vbhjckfd.workers.dev/" />
     <meta name="robots" content="index, follow" />
@@ -103,6 +103,11 @@
       </label>
 
       <label class="field">
+        <span>Days</span>
+        <select id="daytype"></select>
+      </label>
+
+      <label class="field">
         <span>Hour <b id="hour-label">—</b></span>
         <input type="range" id="hour" min="0" max="23" step="1" />
       </label>
@@ -121,7 +126,7 @@
         <div class="ramp" id="ramp"></div>
         <div class="ramp-labels">
           <span id="scale-low"></span>
-          <span>km/h</span>
+          <span id="scale-unit">km/h</span>
           <span id="scale-high"></span>
         </div>
       </div>
@@ -148,10 +153,23 @@
     <section class="visually-hidden">
       <h2>What this map shows</h2>
       <p>
-        Average running speed of Lviv city buses, aggregated into 25-metre grid cells from
-        GTFS-RT vehicle positions archived every ten seconds. Each dot is one cell: green means
-        buses move quickly there, red means they crawl. Use the hour slider to compare the
-        morning peak against the middle of the night, and the month picker to compare months.
+        Running speed of Lviv city buses, aggregated into 25-metre grid cells from GTFS-RT
+        vehicle positions archived every ten seconds. Each dot is one cell: green means buses
+        move quickly there, red means they crawl. Use the hour slider to compare the morning
+        peak against the middle of the night, the month picker to compare months, and the day
+        selector to separate weekdays from weekends — city-wide mean speed at 17:00 is about
+        16.6 km/h on a weekday against 21.4 km/h at the weekend, so averaging the two together
+        hides the rush hour entirely.
+      </p>
+      <h2>Congestion against raw speed</h2>
+      <p>
+        The Statistic selector offers more than an average. The median ignores the tail of waits
+        at lights; the 15th and 85th percentiles show a bad day and a good one; their difference
+        measures how unpredictable a stretch of road is. "% of free-flow" divides each cell's
+        speed by that same cell's own 85th-percentile speed across the whole archive, which
+        separates congestion from slowness: a narrow old-town lane that runs at 20 km/h at three
+        in the morning is not congested, while a ring road down to 22 km/h from 40 is. Clicking
+        any cell shows every statistic for it along with its speed hour by hour.
       </p>
       <h2>How the figures are produced</h2>
       <p>

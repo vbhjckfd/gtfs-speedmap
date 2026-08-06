@@ -1,6 +1,9 @@
 PY := python3
 
-.PHONY: help ingest ingest-all build serve test deploy
+# So every target runs from a plain checkout, with or without `pip install -e .`.
+export PYTHONPATH := src
+
+.PHONY: help ingest ingest-all build serve test deploy pull push update
 
 help:
 	@echo "make ingest DATE=2026-07-15   aggregate one day into data/agg/"
@@ -9,7 +12,9 @@ help:
 	@echo "make serve                    serve web/ on http://localhost:8000"
 	@echo "make test                     run unit tests"
 	@echo "make deploy                   build, then publish web/ as a Cloudflare Worker"
-	@echo "make update                   ingest new days, rebuild, deploy"
+	@echo "make pull                     download aggregates from R2 (skips ones on disk)"
+	@echo "make push                     upload new aggregates to R2"
+	@echo "make update                   pull, ingest new days, push, rebuild, deploy"
 
 ingest:
 	$(PY) -m speedmap.aggregate $(DATE) $(ARGS)
@@ -29,5 +34,11 @@ test:
 deploy: build
 	npx wrangler deploy
 
-update: ingest-all build
+pull:
+	$(PY) -m speedmap.sync pull $(ARGS)
+
+push:
+	$(PY) -m speedmap.sync push $(ARGS)
+
+update: pull ingest-all push build
 	npx wrangler deploy

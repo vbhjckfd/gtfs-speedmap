@@ -1,11 +1,20 @@
-"""Median-from-histogram and payload shape."""
+"""Percentiles from histograms, payload shape, day-type classification."""
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
-from speedmap.build_web import _medians, _payload
+from speedmap.build_web import (
+    _medians,
+    _payload,
+    _percentile,
+    _percentiles,
+    _profile,
+    daytype_of,
+    free_flow,
+)
+from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES
 
 
 def bins(rows: list[tuple[int, int, int, int]]) -> pd.DataFrame:
@@ -64,3 +73,132 @@ def test_payload_without_histograms_still_builds():
     payload = _payload(cells, bins([]))
     assert payload["v"] == [pytest.approx(9.0)]
     assert payload["med"] == [None]
+
+
+# --- percentiles ---------------------------------------------------------
+
+
+def test_percentiles_bracket_the_distribution():
+    # 100 samples: 20 at 5 km/h, 60 at 20, 20 at 40. Cumulative 20 / 80 / 100,
+    # so the 15th sample is in the slow bin, the 50th in the middle one and the
+    # 85th has already crossed into the fast one.
+    b = bins([(0, 0, 5, 20), (0, 0, 20, 60), (0, 0, 40, 20)])
+    q = _percentiles(b, (0.15, 0.5, 0.85))
+    assert q[0.15].loc[(0, 0)] == pytest.approx(5.5)
+    assert q[0.5].loc[(0, 0)] == pytest.approx(20.5)
+    assert q[0.85].loc[(0, 0)] == pytest.approx(40.5)
+
+    # Shrink the fast tail and the 85th falls back into the middle bin:
+    # cumulative 20 / 80 of 85, and the 73rd sample is where it lands.
+    b = bins([(0, 0, 5, 20), (0, 0, 20, 60), (0, 0, 40, 5)])
+    assert _percentile(b, 0.85).loc[(0, 0)] == pytest.approx(20.5)
+
+
+def test_percentile_never_falls_off_the_bottom():
+    """A tiny q must still land on the first bin, not on nothing."""
+    b = bins([(0, 0, 12, 1), (0, 0, 30, 1)])
+    assert _percentile(b, 0.01).loc[(0, 0)] == pytest.approx(12.5)
+
+
+def test_percentile_of_a_single_bin_is_that_bin():
+    b = bins([(3, 3, 7, 40)])
+    for q in (0.15, 0.5, 0.85):
+        assert _percentile(b, q).loc[(3, 3)] == pytest.approx(7.5)
+
+
+def test_percentiles_share_one_pass_with_the_single_shot_version():
+    b = bins([(0, 0, 4, 3), (0, 0, 9, 11), (0, 0, 31, 6), (1, 0, 15, 2)])
+    batched = _percentiles(b, (0.15, 0.5, 0.85))
+    for q in (0.15, 0.5, 0.85):
+        pd.testing.assert_series_equal(batched[q], _percentile(b, q))
+
+
+# --- free-flow reference and the relative metric --------------------------
+
+
+def test_free_flow_pools_every_hour_and_day_type():
+    """The reference has to be global, or the colours shift as the slider moves."""
+    slices = {
+        ("2026-07", "wd"): bins([(0, 0, 10, 90)]).rename(columns={}),
+        ("2026-07", "we"): bins([(0, 0, 40, 10)]).rename(columns={}),
+    }
+    reference = free_flow(slices)
+    # 100 samples pooled: the 85th sits in the slow bin, which one slice alone
+    # would never have said.
+    assert reference.loc[(0, 0)] == pytest.approx(10.5)
+
+
+def test_cells_below_the_free_flow_floor_get_no_ratio():
+    """A ratio against a 4 km/h reference is noise over noise."""
+    slices = {("2026-07", "wd"): bins([(0, 0, 4, 50), (1, 1, 30, 50)])}
+    reference = free_flow(slices)
+    assert (0, 0) not in reference.index
+    assert reference.loc[(1, 1)] == pytest.approx(30.5)
+
+
+def test_payload_rel_is_median_over_the_reference():
+    cells = pd.DataFrame(
+        [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
+        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+    )
+    reference = pd.Series([40.5], index=pd.MultiIndex.from_tuples([(0, 0)], names=["cx", "cy"]))
+    payload = _payload(cells, bins([(0, 0, 20, 10)]), reference)
+    assert payload["med"] == [pytest.approx(20.5)]
+    assert payload["rel"] == [pytest.approx(round(20.5 / 40.5, 2))]
+    assert payload["spread"] == [pytest.approx(0.0)]
+
+
+def test_payload_rel_is_null_without_a_reference():
+    cells = pd.DataFrame(
+        [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
+        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+    )
+    payload = _payload(cells, bins([(0, 0, 20, 10)]), pd.Series(dtype=float))
+    assert payload["rel"] == [None]
+
+
+# --- day types -----------------------------------------------------------
+
+
+def test_daytype_splits_the_week_at_saturday():
+    assert [daytype_of(d) for d in ("2026-08-03", "2026-08-07")] == ["wd", "wd"]
+    assert [daytype_of(d) for d in ("2026-08-08", "2026-08-09")] == ["we", "we"]
+
+
+# --- hourly profile ------------------------------------------------------
+
+
+def cells_by_hour(rows: list[tuple[int, int, int]]) -> pd.DataFrame:
+    """rows of (hour, n, speed_mps), all for one cell."""
+    return pd.DataFrame(
+        [(hour, 0, 0, n, speed * n, 49.84 * n, 24.03 * n) for hour, n, speed in rows],
+        columns=["hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+    )
+
+
+def test_profile_reports_speed_per_hour():
+    hours = [5, 6, 7, 8, 9, 10]
+    rows = [(hour, 10, 5.0) for hour in hours]
+    rows[2] = (7, 10, 2.5)  # a slow hour
+    profile = _profile(cells_by_hour(rows), hours)
+    assert profile["q"] == [18, 18, 9, 18, 18, 18]
+    assert profile["hours"] == hours
+
+
+def test_profile_drops_cells_measured_in_too_few_hours():
+    """A two-bar sparkline reads as 'no buses at 14:00', which is not what it means."""
+    hours = list(range(5, 5 + PROFILE_MIN_HOURS + 1))
+    thin = cells_by_hour([(hour, 10, 5.0) for hour in hours[: PROFILE_MIN_HOURS - 1]])
+    assert _profile(thin, hours)["lat"] == []
+
+    thick = cells_by_hour([(hour, 10, 5.0) for hour in hours[:PROFILE_MIN_HOURS]])
+    assert len(_profile(thick, hours)["lat"]) == 1
+
+
+def test_profile_marks_unmeasured_hours_rather_than_guessing():
+    hours = list(range(5, 5 + PROFILE_MIN_HOURS + 1))
+    rows = [(hour, 10, 5.0) for hour in hours]
+    rows[1] = (hours[1], PROFILE_MIN_SAMPLES - 1, 5.0)  # too thin to report
+    profile = _profile(cells_by_hour(rows), hours)
+    assert profile["q"][1] == profile["no_data"]
+    assert profile["q"][0] == 18

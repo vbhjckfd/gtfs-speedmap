@@ -16,6 +16,7 @@ let requestSeq = 0;
 
 const els = {
   month: document.getElementById("month"),
+  daytype: document.getElementById("daytype"),
   hour: document.getElementById("hour"),
   hourLabel: document.getElementById("hour-label"),
   allHours: document.getElementById("all-hours"),
@@ -25,6 +26,7 @@ const els = {
   ramp: document.getElementById("ramp"),
   scaleLow: document.getElementById("scale-low"),
   scaleHigh: document.getElementById("scale-high"),
+  scaleUnit: document.getElementById("scale-unit"),
 };
 
 /* ---------- colour ---------- */
@@ -53,20 +55,43 @@ function ramp(t) {
   return STOPS[STOPS.length - 1][1];
 }
 
-function speedColor(kmh) {
-  const { low_kmh: low, high_kmh: high } = index.scale;
-  const [r, g, b] = ramp((kmh - low) / (high - low));
+// Each metric carries its own domain, because km/h, a ratio and a spread
+// cannot share one scale. `invert` is for metrics whose high end is the bad
+// end — a wide p85−p15 spread means unpredictable, so it colours red.
+function activeMetric() {
+  return index.metrics.find((m) => m.key === els.metric.value) || index.metrics[0];
+}
+
+function metricColor(value, metric) {
+  const { low, high } = metric.scale;
+  const t = (value - low) / (high - low);
+  const [r, g, b] = ramp(metric.invert ? 1 - t : t);
   return `rgb(${r},${g},${b})`;
 }
 
+// The sparkline is always km/h whatever metric is on screen, so it keeps its
+// own scale rather than borrowing the active one.
+const KMH_METRIC = { scale: { low: 5, high: 35 }, invert: false, factor: 1, decimals: 1 };
+
+function speedColor(kmh) {
+  return metricColor(kmh, KMH_METRIC);
+}
+
+function format(value, metric) {
+  if (value == null || Number.isNaN(value)) return "—";
+  return (value * metric.factor).toFixed(metric.decimals);
+}
+
 function paintLegend() {
+  const metric = activeMetric();
   const stops = STOPS.map(([p]) => {
-    const [r, g, b] = ramp(p);
+    const [r, g, b] = ramp(metric.invert ? 1 - p : p);
     return `rgb(${r},${g},${b}) ${p * 100}%`;
   });
   els.ramp.style.background = `linear-gradient(90deg, ${stops.join(", ")})`;
-  els.scaleLow.textContent = `≤ ${index.scale.low_kmh}`;
-  els.scaleHigh.textContent = `≥ ${index.scale.high_kmh}`;
+  els.scaleLow.textContent = `≤ ${format(metric.scale.low, metric)}`;
+  els.scaleHigh.textContent = `≥ ${format(metric.scale.high, metric)}`;
+  els.scaleUnit.textContent = metric.unit;
 }
 
 /* ---------- map ---------- */
@@ -144,6 +169,7 @@ const DotLayer = L.Layer.extend({
     const bounds = map.getBounds().pad(0.05);
     const { lat, lon } = current;
     const values = speedValues();
+    const metric = activeMetric();
     ctx.globalAlpha = 0.85;
 
     for (let i = 0; i < lat.length; i++) {
@@ -151,7 +177,7 @@ const DotLayer = L.Layer.extend({
       if (lat[i] < bounds.getSouth() || lat[i] > bounds.getNorth()) continue;
       if (lon[i] < bounds.getWest() || lon[i] > bounds.getEast()) continue;
       const p = map.latLngToContainerPoint([lat[i], lon[i]]);
-      ctx.fillStyle = speedColor(values[i]);
+      ctx.fillStyle = metricColor(values[i], metric);
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
@@ -173,10 +199,16 @@ function speedValues(payload) {
   return source[els.metric.value] || source.v;
 }
 
+function hourKey() {
+  return els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0");
+}
+
 function selectionKey() {
-  const month = els.month.value;
-  const hour = els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0");
-  return `${month}-${hour}`;
+  return `${els.month.value}-${els.daytype.value}-${hourKey()}`;
+}
+
+function profileKey() {
+  return `profile-${els.month.value}-${els.daytype.value}`;
 }
 
 /* ---------- shareable URL ---------- */
@@ -185,10 +217,17 @@ function selectionKey() {
 // canonical link stays on the bare homepage, so search engines index one page
 // rather than a hundred near-identical ones.
 function writeUrl() {
+  const centre = map.getCenter();
   const params = new URLSearchParams({
     month: els.month.value,
-    hour: els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0"),
+    days: els.daytype.value,
+    hour: hourKey(),
     stat: els.metric.value,
+    // The viewport too, so a link can point at one junction rather than the
+    // whole city. 5 dp is well under a cell.
+    z: String(map.getZoom()),
+    lat: centre.lat.toFixed(5),
+    lon: centre.lng.toFixed(5),
   });
   // replaceState, not pushState: dragging the slider must not bury the user's
   // previous page under twenty history entries.
@@ -218,6 +257,18 @@ function readUrl() {
   const month = params.get("month");
   if (month && [...els.month.options].some((o) => o.value === month)) {
     els.month.value = month;
+  }
+
+  const daytype = params.get("days");
+  if (daytype && [...els.daytype.options].some((o) => o.value === daytype)) {
+    els.daytype.value = daytype;
+  }
+
+  const zoom = Number(params.get("z"));
+  const lat = Number(params.get("lat"));
+  const lon = Number(params.get("lon"));
+  if (Number.isFinite(zoom) && Number.isFinite(lat) && Number.isFinite(lon) && params.get("z")) {
+    map.setView([lat, lon], zoom);
   }
 
   const hour = params.get("hour");
@@ -254,18 +305,21 @@ function prefetchNeighbours() {
   const at = hours.indexOf(Number(els.hour.value));
   [at - 1, at + 1].forEach((i) => {
     if (i >= 0 && i < hours.length) {
-      fetchSelection(`${els.month.value}-${String(hours[i]).padStart(2, "0")}`).catch(() => {});
+      const hour = String(hours[i]).padStart(2, "0");
+      fetchSelection(`${els.month.value}-${els.daytype.value}-${hour}`).catch(() => {});
     }
   });
 }
 
 function describe(count) {
-  const month = els.month.selectedOptions[0].textContent;
-  const when = els.allHours.checked
-    ? "all hours"
-    : `${String(els.hour.value).padStart(2, "0")}:00–${String(els.hour.value).padStart(2, "0")}:59`;
-  const stat = els.metric.selectedOptions[0].textContent.toLowerCase();
-  return `${month} · ${when} · ${count.toLocaleString()} cells · ${stat}`;
+  const parts = [els.month.selectedOptions[0].textContent];
+  // "All days" is the default, so saying so is noise; a restriction is not.
+  if (els.daytype.value !== "all") parts.push(els.daytype.selectedOptions[0].textContent);
+  const hour = String(els.hour.value).padStart(2, "0");
+  parts.push(els.allHours.checked ? "all hours" : `${hour}:00–${hour}:59`);
+  parts.push(`${count.toLocaleString()} cells`);
+  parts.push(els.metric.selectedOptions[0].textContent.toLowerCase());
+  return parts.join(" · ");
 }
 
 async function render() {
@@ -297,38 +351,111 @@ function syncHourLabel() {
 
 /* ---------- popup ---------- */
 
-map.on("click", (e) => {
-  if (!current) return;
-  const metresPerDegLat = 111320;
-  // A fixed metre tolerance is unclickable when zoomed in and grabs the wrong
-  // cell when zoomed out, so allow a constant ~12 px of slop instead.
-  const tolerance = Math.max(index.cell_size_m, metresPerPixel() * 12);
+const METRES_PER_DEG_LAT = 111320;
+
+/** Index of the point in a {lat, lon} pair of arrays nearest to `latlng`. */
+function nearestIndex(source, latlng) {
+  const cosLat = Math.cos((latlng.lat * Math.PI) / 180);
   let best = -1;
   let bestDist = Infinity;
-  const cosLat = Math.cos((e.latlng.lat * Math.PI) / 180);
-
-  for (let i = 0; i < current.lat.length; i++) {
-    const dy = (current.lat[i] - e.latlng.lat) * metresPerDegLat;
-    const dx = (current.lon[i] - e.latlng.lng) * metresPerDegLat * cosLat;
+  for (let i = 0; i < source.lat.length; i++) {
+    const dy = (source.lat[i] - latlng.lat) * METRES_PER_DEG_LAT;
+    const dx = (source.lon[i] - latlng.lng) * METRES_PER_DEG_LAT * cosLat;
     const d = dx * dx + dy * dy;
     if (d < bestDist) {
       bestDist = d;
       best = i;
     }
   }
-  if (best < 0 || Math.sqrt(bestDist) > tolerance) return;
+  return { index: best, distance: Math.sqrt(bestDist) };
+}
 
-  const median = current.med ? current.med[best] : null;
-  const rows = [`average ${current.v[best].toFixed(1)} km/h`];
-  if (median != null) rows.push(`median ${median.toFixed(1)} km/h`);
+// Speed by hour for one cell, drawn as bars on the same colour ramp as the map
+// so a red bar in the sparkline means the same thing as a red dot on it.
+function sparkline(values, hours, selected) {
+  const known = values.filter((v) => v >= 0);
+  if (!known.length) return "";
+  const top = Math.max(...known);
+  const width = 8;
+  const gap = 1.6;
+  const height = 34;
+  const bars = values
+    .map((value, i) => {
+      const x = (i * (width + gap)).toFixed(1);
+      if (value < 0) {
+        return `<rect x="${x}" y="${height - 1}" width="${width}" height="1" fill="#c9d0d9"/>`;
+      }
+      const h = Math.max(1.5, (value / top) * height);
+      const marked = hours[i] === selected;
+      return (
+        `<rect x="${x}" y="${(height - h).toFixed(1)}" width="${width}" height="${h.toFixed(1)}"` +
+        ` fill="${speedColor(value)}"${marked ? ' stroke="#16202a" stroke-width="1.2"' : ""}/>`
+      );
+    })
+    .join("");
+  const span = values.length * (width + gap) - gap;
+  return (
+    `<svg class="spark" viewBox="0 0 ${span} ${height + 12}" width="${span}" ` +
+    `height="${height + 12}" role="img" aria-label="Speed by hour of day">` +
+    `${bars}<text x="0" y="${height + 10}" class="spark-tick">${hours[0]}:00</text>` +
+    `<text x="${span}" y="${height + 10}" text-anchor="end" class="spark-tick">` +
+    `${hours[hours.length - 1]}:00</text></svg>`
+  );
+}
 
-  L.popup()
-    .setLatLng([current.lat[best], current.lon[best]])
-    .setContent(
-      `<div class="cell-popup"><b>${speedValues()[best].toFixed(1)} km/h</b><br>` +
-        `${rows.join("<br>")}<br>${current.n[best].toLocaleString()} samples</div>`,
-    )
+async function cellProfile(latlng) {
+  const profile = await fetchSelection(profileKey());
+  if (!profile.lat.length) return "";
+  const hit = nearestIndex(profile, latlng);
+  if (hit.index < 0 || hit.distance > index.cell_size_m) return "";
+  const width = profile.hours.length;
+  const values = profile.q.slice(hit.index * width, (hit.index + 1) * width);
+  const selected = els.allHours.checked ? -1 : Number(els.hour.value);
+  return sparkline(values, profile.hours, selected);
+}
+
+function popupContent(i, spark) {
+  const metric = activeMetric();
+  const value = speedValues()[i];
+  const rows = index.metrics
+    .filter((m) => m.key !== metric.key && current[m.key])
+    .map((m) => `<span>${m.label}</span><span>${format(current[m.key][i], m)} ${m.unit}</span>`)
+    .join("");
+  return (
+    `<div class="cell-popup"><b>${format(value, metric)} ${metric.unit}</b>` +
+    `<div class="stat-label">${metric.label}</div>` +
+    `<div class="stats">${rows}` +
+    `<span>Samples</span><span>${current.n[i].toLocaleString()}</span></div>` +
+    `<div class="spark-slot">${spark}</div></div>`
+  );
+}
+
+map.on("click", (e) => {
+  if (!current) return;
+  // A fixed metre tolerance is unclickable when zoomed in and grabs the wrong
+  // cell when zoomed out, so allow a constant ~12 px of slop instead.
+  const tolerance = Math.max(index.cell_size_m, metresPerPixel() * 12);
+  const hit = nearestIndex(current, e.latlng);
+  if (hit.index < 0 || hit.distance > tolerance) return;
+
+  const at = L.latLng(current.lat[hit.index], current.lon[hit.index]);
+  const popup = L.popup()
+    .setLatLng(at)
+    .setContent(popupContent(hit.index, "speed by hour…"))
     .openOn(map);
+
+  // The profile file is a megabyte or so, so it loads on the first click and is
+  // reused after that; the popup opens immediately either way. It has to go
+  // back through setContent rather than patching the DOM — Leaflet re-renders
+  // the popup from the string it was given, so a patched node is wiped on the
+  // next update and the popup never resizes around it.
+  cellProfile(at)
+    .then((svg) => {
+      if (map.hasLayer(popup)) {
+        popup.setContent(popupContent(hit.index, svg || "no hourly profile here"));
+      }
+    })
+    .catch(() => {});
 });
 
 /* ---------- boot ---------- */
@@ -348,12 +475,22 @@ async function boot() {
   els.month.append(all);
   els.month.value = "all";
 
-  for (const metric of index.metrics || [{ key: "v", label: "Average" }]) {
+  for (const daytype of index.daytypes) {
+    const option = document.createElement("option");
+    option.value = daytype.key;
+    option.textContent = `${daytype.label} (${daytype.days}d)`;
+    els.daytype.append(option);
+  }
+  els.daytype.value = "all";
+
+  for (const metric of index.metrics) {
     const option = document.createElement("option");
     option.value = metric.key;
     option.textContent = metric.label;
     els.metric.append(option);
   }
+
+  KMH_METRIC.scale = { low: index.scale.low_kmh, high: index.scale.high_kmh };
 
   const hours = index.hours;
   els.hour.min = String(hours[0]);
@@ -373,6 +510,7 @@ async function boot() {
   await render();
 
   els.month.addEventListener("change", render);
+  els.daytype.addEventListener("change", render);
   els.hour.addEventListener("input", () => {
     syncHourLabel();
     render();
@@ -384,8 +522,17 @@ async function boot() {
   // Every statistic is already in the loaded payload, so this is a repaint.
   els.metric.addEventListener("change", () => {
     writeUrl();
+    paintLegend();
     dots.redraw();
     if (current) els.subtitle.textContent = describe(current.lat.length);
+  });
+
+  // Panning is not a data change, so it only needs the URL rewritten — and not
+  // on every frame of a drag.
+  let pending = null;
+  map.on("moveend", () => {
+    clearTimeout(pending);
+    pending = setTimeout(writeUrl, 300);
   });
 }
 

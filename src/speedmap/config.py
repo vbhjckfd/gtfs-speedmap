@@ -56,6 +56,14 @@ SPEED_MAX_MPS = _float("SPEED_MAX_MPS", 25.0)
 # Cells with fewer samples than this are dropped from the web output.
 MIN_SAMPLES = _int("MIN_SAMPLES", 5)
 
+# The popup's hourly sparkline splits a cell 19 ways, so MIN_SAMPLES applied per
+# hour leaves half the cells with three bars or fewer — which reads as "no buses
+# ran at 14:00" rather than "not measured". A lower floor lifts the median cell
+# from 6 populated hours to 9; cells that still cannot fill PROFILE_MIN_HOURS
+# get no sparkline at all, because a two-bar chart misleads more than it tells.
+PROFILE_MIN_SAMPLES = _int("PROFILE_MIN_SAMPLES", 3)
+PROFILE_MIN_HOURS = _int("PROFILE_MIN_HOURS", 6)
+
 # Hours and months are local-time concepts; the feed is UTC.
 TZ = os.environ.get("TZ_LOCAL", "Europe/Kyiv")
 
@@ -72,6 +80,25 @@ BBOX = (49.70, 49.95, 23.85, 24.20)
 # orange-red against a greener off-peak instead of everything looking slow.
 SCALE_LOW_KMH = _float("SCALE_LOW_KMH", 5.0)
 SCALE_HIGH_KMH = _float("SCALE_HIGH_KMH", 35.0)
+
+# --- Relative speed ("% of free-flow") -----------------------------------
+# A cell's free-flow reference is its own p85 over every hour, month and day
+# type, so the ratio answers "how congested is this bit of road right now"
+# rather than "is this bit of road fast" — the two are near-uncorrelated
+# (measured r = 0.07). The reference must be global: derive it per selection
+# and the colours shift meaninglessly as the slider moves.
+FREE_FLOW_Q = _float("FREE_FLOW_Q", 0.85)
+# Below this, the ratio is noise over noise: a cell whose free-flow is 5 km/h
+# has no free flow to speak of. Measured reference speeds run p25 18.5,
+# p50 28.5, p75 41.5 km/h, so this discards very little.
+REL_MIN_FF_KMH = _float("REL_MIN_FF_KMH", 8.0)
+REL_SCALE_LOW = _float("REL_SCALE_LOW", 0.35)
+REL_SCALE_HIGH = _float("REL_SCALE_HIGH", 1.0)
+
+# Spread (p85 − p15) is unreliability, so its ramp runs the other way: a wide
+# spread is the bad end.
+SPREAD_SCALE_LOW_KMH = _float("SPREAD_SCALE_LOW_KMH", 5.0)
+SPREAD_SCALE_HIGH_KMH = _float("SPREAD_SCALE_HIGH_KMH", 30.0)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
