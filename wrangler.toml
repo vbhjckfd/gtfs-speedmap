@@ -1,0 +1,8 @@
+name = "gtfs-speedmap"
+compatibility_date = "2026-08-01"
+
+# Assets-only Worker: no script, Cloudflare serves web/ straight from the edge.
+# web/_headers controls caching.
+[assets]
+directory = "./web"
+not_found_handling = "404-page"

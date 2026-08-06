@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lviv bus speeds</title>
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+
+    <div class="panel" id="panel">
+      <h1>Lviv bus speeds</h1>
+      <p class="sub" id="subtitle">loading…</p>
+
+      <label class="field">
+        <span>Month</span>
+        <select id="month"></select>
+      </label>
+
+      <label class="field">
+        <span>Hour <b id="hour-label">—</b></span>
+        <input type="range" id="hour" min="0" max="23" step="1" />
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="all-hours" />
+        <span>Whole day</span>
+      </label>
+
+      <div class="legend">
+        <div class="ramp" id="ramp"></div>
+        <div class="ramp-labels">
+          <span id="scale-low"></span>
+          <span>km/h</span>
+          <span id="scale-high"></span>
+        </div>
+      </div>
+
+      <p class="note" id="note"></p>
+    </div>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

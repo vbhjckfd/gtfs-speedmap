@@ -1,0 +1,6 @@
+# The data filenames are stable across rebuilds, so they must revalidate.
+/data/*
+  Cache-Control: public, max-age=300, must-revalidate
+
+/vendor/*
+  Cache-Control: public, max-age=604800
