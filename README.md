@@ -64,9 +64,25 @@ distance from *every* stop hid exactly the sites worth finding — one terminus 
 after that was fixed, because an unrelated route's ordinary stop happened to sit 102 m away. Dwell
 at an ordinary stop is already handled by `STOP_RADIUS_M`.
 
-Over 88 days this finds **78 sites holding ~4.4M samples**. Spot-checked against OpenStreetMap, they
+Over 88 days this finds **77 sites holding ~4.4M samples**. Spot-checked against OpenStreetMap, they
 are what they claim to be: the two largest are tagged `amenity=parking` (Збиральна, Авіаційна), and
 the rest are route termini and the bus station.
+
+[`data/depots.json`](data/depots.json) is the one file under `data/` that is committed. It is
+curated rather than derived — each site was checked against OSM — and regenerating it needs a full
+un-masked re-ingest, so a fresh clone that lacked it would build a map full of parked buses.
+`tests/test_depots.py` checks its shape: every radius plausible and inside the bbox, no zone wholly
+inside another, and any hand-set radius carrying a `note` saying why, so the next re-discovery does
+not silently revert it.
+
+A site's radius comes from the extent of the cells that *individually* cleared `DEPOT_MIN_SAMPLES`,
+which under-sizes a yard whose edges are thinly sampled — the core is 5,000 samples in six cells,
+the apron is 40 samples in each of twenty. Widen those by hand against the evidence: take the radius
+out to the last cell at or under `DEPOT_MAX_KMH` and stop before the first moving one. Do not try to
+grow every site at once by flooding outward through contiguous slow cells; that was measured, and it
+pushed zones to 300–480 m over Галицька площа, вул. Хоткевича and Галицьке перехрестя — a primary
+road, a tertiary road and a residential junction. Those cells are slow because buses stand *on the
+street* there, and the street is real.
 
 ```bash
 python -m speedmap.depots           # discover, writes data/depots.json
@@ -239,6 +255,10 @@ timezone, clamped to the nearest hour the collector actually polls.
 
 - A depot that opened after the aggregates were last mined will show up as a red knot until
   `python -m speedmap.depots` is run again on unmasked data.
+- Five sites are masked only at build time, so their cores are still sitting in `data/agg/`. Any
+  analysis over those parquets sees them as ordinary slow cells — one reads as 123k samples at
+  1.2 km/h, slow in sixteen separate hours. Run `make ingest-all ARGS=--force` before trusting a
+  measurement of what the mask has left behind.
 - Hours 00:00–04:00 are absent: the collector does not poll then.
 - `static/` archives only start 2026-07-31, so earlier days are matched against the oldest archive.
   About 35% of May trip_ids no longer exist there, which is what the route+direction fallback covers.

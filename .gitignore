@@ -2,7 +2,13 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
-data/
+# The contents rather than the directory, so the depot mask can be re-included:
+# git cannot un-ignore a file inside an excluded directory.
+data/*
+# The mask is curated, not derived — each site was checked against
+# OpenStreetMap, and without it a fresh clone builds a map full of parked
+# buses. Regenerating it needs a full un-masked re-ingest.
+!data/depots.json
 web/data/*.json
 node_modules/
 .wrangler/

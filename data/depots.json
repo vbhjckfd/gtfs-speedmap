@@ -1,0 +1,629 @@
+{
+  "criteria": {
+    "max_kmh": 4.0,
+    "min_samples": 300,
+    "min_hours_slow": 10,
+    "min_dist_to_stop_m": 120.0,
+    "pad_m": 40.0,
+    "cell_size_m": 25.0
+  },
+  "sites": [
+    {
+      "lat": 49.826555,
+      "lon": 23.931084,
+      "radius_m": 274.4,
+      "cells": 67,
+      "samples": 885257,
+      "kmh": 0.58
+    },
+    {
+      "lat": 49.783437,
+      "lon": 24.059409,
+      "radius_m": 130.0,
+      "cells": 13,
+      "samples": 397094,
+      "kmh": 1.48
+    },
+    {
+      "lat": 49.824693,
+      "lon": 23.9432,
+      "radius_m": 215.0,
+      "cells": 50,
+      "samples": 392937,
+      "kmh": 0.95
+    },
+    {
+      "lat": 49.839745,
+      "lon": 23.995885,
+      "radius_m": 103.0,
+      "cells": 10,
+      "samples": 355861,
+      "kmh": 1.03
+    },
+    {
+      "lat": 49.875576,
+      "lon": 23.938253,
+      "radius_m": 103.8,
+      "cells": 9,
+      "samples": 322550,
+      "kmh": 0.59
+    },
+    {
+      "lat": 49.820931,
+      "lon": 23.915696,
+      "radius_m": 63.5,
+      "cells": 5,
+      "samples": 262030,
+      "kmh": 1.47
+    },
+    {
+      "lat": 49.874424,
+      "lon": 24.060688,
+      "radius_m": 134.3,
+      "cells": 8,
+      "samples": 235983,
+      "kmh": 1.33
+    },
+    {
+      "lat": 49.784947,
+      "lon": 24.059339,
+      "radius_m": 133.1,
+      "cells": 8,
+      "samples": 150827,
+      "kmh": 0.89
+    },
+    {
+      "lat": 49.81312,
+      "lon": 24.05253,
+      "radius_m": 159.9,
+      "cells": 21,
+      "samples": 92367,
+      "kmh": 1.07
+    },
+    {
+      "lat": 49.813992,
+      "lon": 24.050672,
+      "radius_m": 51.6,
+      "cells": 4,
+      "samples": 80555,
+      "kmh": 0.36
+    },
+    {
+      "lat": 49.849482,
+      "lon": 24.055431,
+      "radius_m": 53.4,
+      "cells": 4,
+      "samples": 76726,
+      "kmh": 0.36
+    },
+    {
+      "lat": 49.871243,
+      "lon": 24.002835,
+      "radius_m": 69.1,
+      "cells": 6,
+      "samples": 71909,
+      "kmh": 0.79
+    },
+    {
+      "lat": 49.806045,
+      "lon": 23.97978,
+      "radius_m": 81.8,
+      "cells": 6,
+      "samples": 68632,
+      "kmh": 0.55
+    },
+    {
+      "lat": 49.879175,
+      "lon": 24.040599,
+      "radius_m": 67.9,
+      "cells": 6,
+      "samples": 62174,
+      "kmh": 0.65
+    },
+    {
+      "lat": 49.90469,
+      "lon": 23.926724,
+      "radius_m": 101.3,
+      "cells": 8,
+      "samples": 53310,
+      "kmh": 1.24
+    },
+    {
+      "lat": 49.794689,
+      "lon": 24.044426,
+      "radius_m": 66.1,
+      "cells": 5,
+      "samples": 52992,
+      "kmh": 1.21
+    },
+    {
+      "lat": 49.843851,
+      "lon": 24.044062,
+      "radius_m": 66.5,
+      "cells": 5,
+      "samples": 50636,
+      "kmh": 0.49
+    },
+    {
+      "lat": 49.852348,
+      "lon": 24.020221,
+      "radius_m": 69.2,
+      "cells": 5,
+      "samples": 48884,
+      "kmh": 0.23
+    },
+    {
+      "lat": 49.822374,
+      "lon": 24.147169,
+      "radius_m": 63.5,
+      "cells": 4,
+      "samples": 47809,
+      "kmh": 1.37
+    },
+    {
+      "lat": 49.809071,
+      "lon": 24.120192,
+      "radius_m": 75.7,
+      "cells": 6,
+      "samples": 46532,
+      "kmh": 0.69
+    },
+    {
+      "lat": 49.825951,
+      "lon": 23.91137,
+      "radius_m": 57.0,
+      "cells": 3,
+      "samples": 42404,
+      "kmh": 0.42
+    },
+    {
+      "lat": 49.875823,
+      "lon": 23.877049,
+      "radius_m": 60.2,
+      "cells": 3,
+      "samples": 40902,
+      "kmh": 0.61
+    },
+    {
+      "lat": 49.831996,
+      "lon": 24.065935,
+      "radius_m": 76.1,
+      "cells": 6,
+      "samples": 39539,
+      "kmh": 0.6
+    },
+    {
+      "lat": 49.842207,
+      "lon": 24.103035,
+      "radius_m": 50.5,
+      "cells": 2,
+      "samples": 39172,
+      "kmh": 1.47
+    },
+    {
+      "lat": 49.831649,
+      "lon": 23.947516,
+      "radius_m": 118.8,
+      "cells": 6,
+      "samples": 30832,
+      "kmh": 1.1
+    },
+    {
+      "lat": 49.850026,
+      "lon": 24.05527,
+      "radius_m": 54.8,
+      "cells": 3,
+      "samples": 26704,
+      "kmh": 1.08
+    },
+    {
+      "lat": 49.827816,
+      "lon": 23.954236,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 26614,
+      "kmh": 1.79
+    },
+    {
+      "lat": 49.836176,
+      "lon": 23.996495,
+      "radius_m": 58.0,
+      "cells": 3,
+      "samples": 24589,
+      "kmh": 0.92
+    },
+    {
+      "lat": 49.877698,
+      "lon": 23.888054,
+      "radius_m": 59.0,
+      "cells": 4,
+      "samples": 22565,
+      "kmh": 0.38
+    },
+    {
+      "lat": 49.84651,
+      "lon": 24.02447,
+      "radius_m": 69.4,
+      "cells": 7,
+      "samples": 20672,
+      "kmh": 1.2
+    },
+    {
+      "lat": 49.784618,
+      "lon": 24.07,
+      "radius_m": 77.8,
+      "cells": 5,
+      "samples": 19852,
+      "kmh": 0.85
+    },
+    {
+      "lat": 49.858055,
+      "lon": 24.063821,
+      "radius_m": 48.4,
+      "cells": 2,
+      "samples": 19828,
+      "kmh": 1.88
+    },
+    {
+      "lat": 49.835897,
+      "lon": 24.070925,
+      "radius_m": 44.1,
+      "cells": 2,
+      "samples": 18465,
+      "kmh": 3.13
+    },
+    {
+      "lat": 49.857593,
+      "lon": 24.063943,
+      "radius_m": 84.4,
+      "cells": 3,
+      "samples": 18448,
+      "kmh": 0.85
+    },
+    {
+      "lat": 49.872146,
+      "lon": 24.106436,
+      "radius_m": 51.5,
+      "cells": 3,
+      "samples": 17079,
+      "kmh": 2.77
+    },
+    {
+      "lat": 49.839274,
+      "lon": 24.032633,
+      "radius_m": 79.7,
+      "cells": 4,
+      "samples": 14623,
+      "kmh": 2.06
+    },
+    {
+      "lat": 49.870973,
+      "lon": 23.939802,
+      "radius_m": 95.4,
+      "cells": 8,
+      "samples": 14601,
+      "kmh": 0.08
+    },
+    {
+      "lat": 49.793457,
+      "lon": 24.022402,
+      "radius_m": 66.1,
+      "cells": 3,
+      "samples": 13925,
+      "kmh": 1.87
+    },
+    {
+      "lat": 49.820732,
+      "lon": 23.914764,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 13745,
+      "kmh": 3.12
+    },
+    {
+      "lat": 49.867383,
+      "lon": 23.958678,
+      "radius_m": 96.2,
+      "cells": 6,
+      "samples": 10832,
+      "kmh": 1.29
+    },
+    {
+      "lat": 49.842696,
+      "lon": 24.104416,
+      "radius_m": 62.2,
+      "cells": 4,
+      "samples": 10358,
+      "kmh": 0.44
+    },
+    {
+      "lat": 49.824004,
+      "lon": 23.912372,
+      "radius_m": 92.6,
+      "cells": 4,
+      "samples": 9979,
+      "kmh": 0.2
+    },
+    {
+      "lat": 49.822856,
+      "lon": 24.084485,
+      "radius_m": 48.8,
+      "cells": 2,
+      "samples": 9125,
+      "kmh": 3.09
+    },
+    {
+      "lat": 49.83632,
+      "lon": 23.997243,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 8409,
+      "kmh": 1.19
+    },
+    {
+      "lat": 49.834674,
+      "lon": 23.878577,
+      "radius_m": 46.9,
+      "cells": 2,
+      "samples": 8221,
+      "kmh": 3.14
+    },
+    {
+      "lat": 49.814967,
+      "lon": 23.917209,
+      "radius_m": 53.8,
+      "cells": 2,
+      "samples": 7952,
+      "kmh": 0.59
+    },
+    {
+      "lat": 49.855978,
+      "lon": 24.073068,
+      "radius_m": 55.0,
+      "cells": 4,
+      "samples": 7830,
+      "kmh": 0.12
+    },
+    {
+      "lat": 49.850448,
+      "lon": 24.025974,
+      "radius_m": 46.8,
+      "cells": 2,
+      "samples": 7626,
+      "kmh": 0.24
+    },
+    {
+      "lat": 49.794869,
+      "lon": 24.046995,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 7596,
+      "kmh": 0.97
+    },
+    {
+      "lat": 49.873162,
+      "lon": 24.050578,
+      "radius_m": 68.2,
+      "cells": 3,
+      "samples": 6633,
+      "kmh": 0.62
+    },
+    {
+      "lat": 49.822285,
+      "lon": 24.148183,
+      "radius_m": 44.8,
+      "cells": 2,
+      "samples": 6578,
+      "kmh": 0.17
+    },
+    {
+      "lat": 49.877437,
+      "lon": 23.937635,
+      "radius_m": 59.0,
+      "cells": 3,
+      "samples": 6504,
+      "kmh": 0.51
+    },
+    {
+      "lat": 49.843751,
+      "lon": 23.861083,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 6353,
+      "kmh": 0.11
+    },
+    {
+      "lat": 49.855651,
+      "lon": 24.000255,
+      "radius_m": 140.0,
+      "cells": 6,
+      "samples": 5751,
+      "kmh": 0.5,
+      "note": "Yard off вулиця Василя Єрошенка. Discovery sized this from its core only: the surrounding cells hold 5-126 samples each, under DEPOT_MIN_SAMPLES, so they never joined the cluster. Widened by hand after the residue showed on the map. 140 m covers all 16 remaining cells at or under 4 km/h and no moving cell at all; at 165 m the first cell over 10 km/h appears."
+    },
+    {
+      "lat": 49.850515,
+      "lon": 24.021214,
+      "radius_m": 45.9,
+      "cells": 2,
+      "samples": 5160,
+      "kmh": 1.41
+    },
+    {
+      "lat": 49.850921,
+      "lon": 24.050075,
+      "radius_m": 42.2,
+      "cells": 2,
+      "samples": 4930,
+      "kmh": 2.4
+    },
+    {
+      "lat": 49.831114,
+      "lon": 23.945851,
+      "radius_m": 50.4,
+      "cells": 3,
+      "samples": 4014,
+      "kmh": 0.44
+    },
+    {
+      "lat": 49.927144,
+      "lon": 24.114202,
+      "radius_m": 50.4,
+      "cells": 2,
+      "samples": 3663,
+      "kmh": 0.43
+    },
+    {
+      "lat": 49.855579,
+      "lon": 24.075079,
+      "radius_m": 51.0,
+      "cells": 2,
+      "samples": 3323,
+      "kmh": 0.25
+    },
+    {
+      "lat": 49.800904,
+      "lon": 23.98252,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 2694,
+      "kmh": 0.03
+    },
+    {
+      "lat": 49.837553,
+      "lon": 24.002413,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 2507,
+      "kmh": 3.94
+    },
+    {
+      "lat": 49.800151,
+      "lon": 24.004464,
+      "radius_m": 48.6,
+      "cells": 2,
+      "samples": 2426,
+      "kmh": 0.2
+    },
+    {
+      "lat": 49.805489,
+      "lon": 23.985891,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 2172,
+      "kmh": 0.53
+    },
+    {
+      "lat": 49.806803,
+      "lon": 24.054766,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 2167,
+      "kmh": 0.26
+    },
+    {
+      "lat": 49.822596,
+      "lon": 24.08608,
+      "radius_m": 61.5,
+      "cells": 2,
+      "samples": 2059,
+      "kmh": 0.48
+    },
+    {
+      "lat": 49.834981,
+      "lon": 23.998726,
+      "radius_m": 53.2,
+      "cells": 2,
+      "samples": 2018,
+      "kmh": 0.24
+    },
+    {
+      "lat": 49.789192,
+      "lon": 24.053732,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 1358,
+      "kmh": 0.08
+    },
+    {
+      "lat": 49.912246,
+      "lon": 23.914744,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 1267,
+      "kmh": 0.08
+    },
+    {
+      "lat": 49.839823,
+      "lon": 24.023449,
+      "radius_m": 49.6,
+      "cells": 2,
+      "samples": 892,
+      "kmh": 0.45
+    },
+    {
+      "lat": 49.851746,
+      "lon": 24.034752,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 865,
+      "kmh": 0.06
+    },
+    {
+      "lat": 49.865383,
+      "lon": 23.931357,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 747,
+      "kmh": 0.08
+    },
+    {
+      "lat": 49.782218,
+      "lon": 24.059501,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 542,
+      "kmh": 0.12
+    },
+    {
+      "lat": 49.859681,
+      "lon": 24.064252,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 539,
+      "kmh": 0.28
+    },
+    {
+      "lat": 49.853282,
+      "lon": 24.015732,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 476,
+      "kmh": 1.27
+    },
+    {
+      "lat": 49.801071,
+      "lon": 23.989275,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 441,
+      "kmh": 0.75
+    },
+    {
+      "lat": 49.830189,
+      "lon": 23.942969,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 331,
+      "kmh": 1.2
+    },
+    {
+      "lat": 49.82579,
+      "lon": 23.912717,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 328,
+      "kmh": 1.09
+    }
+  ]
+}
