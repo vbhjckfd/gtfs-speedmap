@@ -439,7 +439,7 @@
       "cells": 6,
       "samples": 5751,
       "kmh": 0.5,
-      "note": "Yard off вулиця Василя Єрошенка. Discovery sized this from its core only: the surrounding cells hold 5-126 samples each, under DEPOT_MIN_SAMPLES, so they never joined the cluster. Widened by hand after the residue showed on the map. 140 m covers all 16 remaining cells at or under 4 km/h and no moving cell at all; at 165 m the first cell over 10 km/h appears."
+      "note": "Yard off \u0432\u0443\u043b\u0438\u0446\u044f \u0412\u0430\u0441\u0438\u043b\u044f \u0404\u0440\u043e\u0448\u0435\u043d\u043a\u0430. Discovery sized this from its core only: the surrounding cells hold 5-126 samples each, under DEPOT_MIN_SAMPLES, so they never joined the cluster. Widened by hand after the residue showed on the map. 140 m covers all 16 remaining cells at or under 4 km/h and no moving cell at all; at 165 m the first cell over 10 km/h appears."
     },
     {
       "lat": 49.850515,
@@ -472,6 +472,14 @@
       "cells": 2,
       "samples": 3663,
       "kmh": 0.43
+    },
+    {
+      "lat": 49.92802,
+      "lon": 23.994251,
+      "radius_m": 40.0,
+      "cells": 1,
+      "samples": 3445,
+      "kmh": 0.93
     },
     {
       "lat": 49.855579,

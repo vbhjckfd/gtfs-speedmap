@@ -64,7 +64,7 @@ distance from *every* stop hid exactly the sites worth finding — one terminus 
 after that was fixed, because an unrelated route's ordinary stop happened to sit 102 m away. Dwell
 at an ordinary stop is already handled by `STOP_RADIUS_M`.
 
-Over 88 days this finds **77 sites holding ~4.4M samples**. Spot-checked against OpenStreetMap, they
+Over 89 days this finds **78 sites holding ~4.39M samples**. Spot-checked against OpenStreetMap, they
 are what they claim to be: the two largest are tagged `amenity=parking` (Збиральна, Авіаційна), and
 the rest are route termini and the bus station.
 
@@ -157,7 +157,7 @@ make update   # ingest the new days, rebuild, deploy
 ```
 
 `ingest-all` only reads days with no `data/agg/*.parquet` yet, so a month costs a few minutes even
-though the archive is 88 days deep. The map carries its own date range in the panel, so a stale
+though the archive is 89 days deep. The map carries its own date range in the panel, so a stale
 deploy says so rather than pretending to be current.
 
 `data/` is git-ignored and is the only copy of ~330 MB that takes a couple of hours to rebuild from
@@ -255,10 +255,13 @@ timezone, clamped to the nearest hour the collector actually polls.
 
 - A depot that opened after the aggregates were last mined will show up as a red knot until
   `python -m speedmap.depots` is run again on unmasked data.
-- Five sites are masked only at build time, so their cores are still sitting in `data/agg/`. Any
-  analysis over those parquets sees them as ordinary slow cells — one reads as 123k samples at
-  1.2 km/h, slow in sixteen separate hours. Run `make ingest-all ARGS=--force` before trusting a
-  measurement of what the mask has left behind.
+- A site added since the last full re-ingest is masked only at build time, so its samples are still
+  in `data/agg/`. The map is right either way, but any *analysis* over those parquets sees the site
+  as ordinary slow cells and will mislead — before the last re-ingest one such core read as 123k
+  samples at 1.2 km/h, slow in sixteen separate hours, which made a proposed change to the depot
+  heuristics look far more justified than it was. Run `make ingest-all ARGS=--force` first when
+  measuring what the mask has left behind. Right now exactly one site is in that state
+  (Воля-Гомулецька, 3.4k samples).
 - Hours 00:00–04:00 are absent: the collector does not poll then.
 - `static/` archives only start 2026-07-31, so earlier days are matched against the oldest archive.
   About 35% of May trip_ids no longer exist there, which is what the route+direction fallback covers.
