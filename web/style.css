@@ -250,10 +250,26 @@ input[type="range"] {
   color: var(--muted);
 }
 
-.ride-more,
 .ride-empty {
   font-size: 11px;
   color: var(--muted);
+}
+
+.ride-more {
+  display: block;
+  width: 100%;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  color: #3b6ea5;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.ride-more:hover {
+  text-decoration: underline;
 }
 
 .ruler-field {

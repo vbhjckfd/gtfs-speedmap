@@ -544,7 +544,14 @@ function formatDuration(seconds) {
 // This block answers the other question — of the buses that actually run past
 // both ends, how long did they take between them — from stop-to-stop times
 // measured on the archived vehicles themselves, dwell and lights included.
-const RIDES = { paths: null, data: null, key: null, highlight: null, loading: false };
+const RIDES = {
+  paths: null,
+  data: null,
+  key: null,
+  highlight: null,
+  loading: false,
+  expanded: false,
+};
 
 // How far a clicked point may be from a stop before that route is not really
 // serving it. Roughly a five-minute walk.
@@ -693,13 +700,23 @@ function ridesReadout() {
       `no route has a stop within ${RIDE_NEAR_M} m of both, in that order.</div>`
     );
   }
-  const shown = options.slice(0, RIDE_ROWS).map(rideRow).join("");
-  const rest = options.length - RIDE_ROWS;
+  // The slower ones are still ways of making the journey, so the tail folds
+  // away rather than disappearing — the box opens short, not short of answers.
+  const limit = RIDES.expanded ? options.length : RIDE_ROWS;
+  const shown = options.slice(0, limit).map(rideRow).join("");
+  const rest = options.length - limit;
   const source = rideMetric() === "avg" ? "average" : "median";
+  const more =
+    rest > 0
+      ? `<button type="button" class="ride-more" data-expand="1">` +
+        `Show ${rest} slower route${rest === 1 ? "" : "s"}</button>`
+      : RIDES.expanded && options.length > RIDE_ROWS
+        ? `<button type="button" class="ride-more" data-expand="0">Show fewer</button>`
+        : "";
   return (
     `<div class="ride-head">On the bus <span>${source} of observed rides</span></div>` +
     shown +
-    (rest > 0 ? `<div class="ride-more">${rest} slower route${rest === 1 ? "" : "s"}</div>` : "")
+    more
   );
 }
 
@@ -778,6 +795,7 @@ function rulerClear() {
   RULER.vertices.forEach((marker) => RULER.layer.removeLayer(marker));
   RULER.vertices = [];
   RULER.points = [];
+  RIDES.expanded = false; // a new journey opens on its best few again
   highlightRide(null);
   rulerRedraw();
 }
@@ -848,6 +866,12 @@ function rulerBoot() {
   // Picking a route draws the stretch of it being timed, which is the only way
   // to see that the fast one is fast because it runs a different street.
   els.rides.addEventListener("click", (e) => {
+    const toggle = e.target.closest("[data-expand]");
+    if (toggle) {
+      RIDES.expanded = toggle.dataset.expand === "1";
+      els.rides.innerHTML = ridesReadout();
+      return;
+    }
     const row = e.target.closest("[data-ride]");
     if (!row) return;
     const options = rideOptions(RULER.points[0], RULER.points[RULER.points.length - 1]);
