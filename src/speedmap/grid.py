@@ -62,5 +62,34 @@ def near_trip_stop(
     return False
 
 
+def stops_near(
+    x: float,
+    y: float,
+    wanted: dict[str, int] | frozenset[str],
+    feed: StaticFeed,
+    radius_m: float,
+    bucket_m: float = STOP_BUCKET_M,
+):
+    """Yield (stop_id, distance²) for stops of `wanted` within `radius_m`.
+
+    The same bucket sweep as `near_trip_stop`, but it reports which stop and how
+    far rather than answering yes or no — segments.py needs the nearest approach
+    to each stop, not the fact that there was one.
+    """
+    bx, by = int(x // bucket_m), int(y // bucket_m)
+    buckets = feed.stop_buckets
+    stop_xy = feed.stop_xy
+    r2_limit = radius_m * radius_m
+    reach = max(1, math.ceil(radius_m / bucket_m))
+    for dx, dy in _NEIGHBOURHOODS.get(reach) or _neighbourhood(reach):
+        for stop_id in buckets.get((bx + dx, by + dy), ()):
+            if stop_id not in wanted:
+                continue
+            sx, sy = stop_xy[stop_id]
+            d2 = (sx - x) ** 2 + (sy - y) ** 2
+            if d2 <= r2_limit:
+                yield stop_id, d2
+
+
 def project(lon: float, lat: float) -> tuple[float, float]:
     return project_xy(lon, lat)

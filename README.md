@@ -178,12 +178,64 @@ fix.
 The time is the bus moving. Waiting for it is not in the archive, and neither is the walk to the
 stop, so this is the ride and nothing else.
 
+## What the buses actually did
+
+Everything above prices a *shape*. Underneath it, the ruler answers the question that was really
+being asked — of the buses that run past both ends, how long did they take between them — from a
+second pass over the same archive that never looks at the speed field at all.
+
+[`segments.py`](src/speedmap/segments.py) reassembles each vehicle's day into runs, finds the
+moment each run came nearest to every stop on its route's path, and keeps the elapsed time between
+adjacent stops. That number includes everything a rider sits through: the dwell at the stop, the
+queue at the light, the wait to pull out. The speed map excludes all of it by construction, which
+is why the two figures differ and why both are worth having.
+
+```
+R2  raw/YYYY-MM-DD/*.pb
+        │  python -m speedmap.segments --all
+        ▼
+data/seg/YYYY-MM-DD.parquet       (month, hour, route, direction, stop pair) -> n, sum_s
+data/seghist/YYYY-MM-DD.parquet   the same key plus a 5-second bin
+data/paths.json                   route paths and stop geometry, from the schedule
+        │  python -m speedmap.build_web
+        ▼
+web/data/rides-{month}-{days}-{hour}.json   per route, one figure per leg of its path
+web/data/paths.json
+```
+
+Legs are keyed by the **stop pair**, not by the trip, so every variant of a route feeds the same
+leg, and a leg runs arrival to arrival — which makes the sum across a range telescope into exactly
+the time between arriving at the first stop and arriving at the last.
+
+| Rejected | Why |
+|---|---|
+| A leg spanning a feed hole longer than `SEG_GAP_MAX_S` | The vehicle was unobserved across it, so the leg may not be the leg it looks like. |
+| A leg longer than `SEG_MAX_S` | Not a leg: a bus that broke down, was pulled from service, or sat out a diversion. |
+| A leg that runs backwards | Nearest approach can land out of order when two stops are close and the GPS wanders. |
+| A silence longer than `RUN_GAP_MAX_S` | Ends the run. A vehicle keeps its trip_id through a layover, so without this a "leg" could span the turnaround. |
+| A leg with fewer than `SEG_MIN_OBS` observations | One bus having a bad morning is not a median. Reported as a hole, not filled in silently. |
+
+About 1% of candidate legs are rejected, and 96% of the 3,107 adjacent stop pairs in the network
+have enough observations to publish.
+
+Clicking two points then lists every route with a stop within 500 m of both, **in path order** —
+the same two points are a different journey on the other side of the street — ranked by the whole
+door-to-door journey rather than the bus part of it, since a route two minutes quicker that leaves
+you 600 m further from the door is not quicker. Picking one draws the stretch being timed.
+
+Three things it does not claim. It does not know when the next bus leaves, so waiting time is
+absent and a route running every 40 minutes reads the same as one every 6. Summing per-leg medians
+is not the median of the total — the average is additive and exact, the median is a good estimate
+that assumes a bad leg does not predict the next one. And the highlighted route is drawn stop to
+stop rather than along the street, because the leg times need the schedule's stop order but not
+its shape geometry.
+
 ## Keeping it current
 
 Updating is manual, roughly monthly:
 
 ```bash
-make update   # ingest the new days, rebuild, deploy
+make update   # ingest the new days, time the new legs, rebuild, deploy
 ```
 
 `ingest-all` only reads days with no `data/agg/*.parquet` yet, so a month costs a few minutes even

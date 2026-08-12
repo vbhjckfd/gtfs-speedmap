@@ -155,15 +155,16 @@
         <button type="button" id="ruler-clear">Clear</button>
       </div>
       <div class="ruler-figures" id="ruler-figures"></div>
+      <div class="rides" id="rides"></div>
       <label class="field ruler-field">
-        <span>Speed used</span>
+        <span>Statistic</span>
         <select id="ruler-metric"></select>
       </label>
       <p class="note">
-        Straight lines between the points you click, timed cell by cell — no waiting for the
-        bus, no detour onto the real street grid. Cells where the typical bus is standing count
-        as 3 km/h, so one of them cannot swallow the whole trip. Drag a point to move it,
-        Backspace to undo, Esc to clear.
+        The headline figure prices the line you drew against the speed map, cell by cell — no
+        dwell at stops, no waiting for the bus, no detour onto the real street grid. The routes
+        below are the other thing: real vehicles timed between the stops nearest your two ends,
+        standing time and all. Drag a point to move it, Backspace to undo, Esc to clear.
       </p>
     </div>
 
@@ -188,6 +189,18 @@
         separates congestion from slowness: a narrow old-town lane that runs at 20 km/h at three
         in the morning is not congested, while a ring road down to 22 km/h from 40 is. Clicking
         any cell shows every statistic for it along with its speed hour by hour.
+      </p>
+      <h2>Ride time between two points</h2>
+      <p>
+        The ruler measures a journey rather than a distance. Drop a point at each end and it
+        gives two figures: the line you drew priced against the speed map cell by cell, and —
+        underneath — every bus route with a stop near both ends, timed on what its vehicles
+        actually did. Those route times come from a separate pass over the same archive that
+        follows individual buses between consecutive stops, so they include the dwell at each
+        stop and the wait at each light, which the speed map excludes by design. Routes are
+        ranked by the whole door-to-door journey including the walk to the stop, and picking one
+        draws the stretch of it being timed. Waiting for the bus to turn up is not measured:
+        the archive records where buses were, not when the next one leaves.
       </p>
       <h2>How the figures are produced</h2>
       <p>

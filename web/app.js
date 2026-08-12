@@ -32,6 +32,7 @@ const els = {
   scaleHigh: document.getElementById("scale-high"),
   scaleUnit: document.getElementById("scale-unit"),
   ruler: document.getElementById("ruler"),
+  rides: document.getElementById("rides"),
   rulerMetric: document.getElementById("ruler-metric"),
   rulerFigures: document.getElementById("ruler-figures"),
   rulerClear: document.getElementById("ruler-clear"),
@@ -613,6 +614,191 @@ function formatDistance(metres) {
   return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(2)} km`;
 }
 
+/* ---------- real rides ---------- */
+
+// The drawn line above is an integral of the speed field: it prices a shape,
+// not a journey, and by construction it cannot see a bus standing at a stop.
+// This block answers the other question — of the buses that actually run past
+// both ends, how long did they take between them — from stop-to-stop times
+// measured on the archived vehicles themselves, dwell and lights included.
+const RIDES = { paths: null, data: null, key: null, highlight: null, loading: false };
+
+// How far a clicked point may be from a stop before that route is not really
+// serving it. Roughly a five-minute walk.
+const RIDE_NEAR_M = 500;
+const RIDE_ROWS = 4;
+
+function ridesKey() {
+  return `rides-${els.month.value}-${els.daytype.value}-${hourKey()}`;
+}
+
+// The ride figures follow the ruler's own dropdown: the average of observed
+// leg times, or their median. The two percentile options have no counterpart
+// in a measured journey, so they fall through to the median and say so.
+function rideMetric() {
+  return els.rulerMetric.value === "v" ? "avg" : "med";
+}
+
+function metresBetween(lat1, lon1, lat2, lon2) {
+  const dy = (lat1 - lat2) * METRES_PER_DEG_LAT;
+  const dx = (lon1 - lon2) * METRES_PER_DEG_LAT * Math.cos((lat1 * Math.PI) / 180);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Walking speed, for ranking routes by the whole journey. 5 km/h is the usual
+// planning figure and is close enough for a few hundred metres.
+const WALK_KMH = 5;
+
+function walkSeconds(metres) {
+  return metres / ((WALK_KMH * 1000) / 3600);
+}
+
+/** Where along a route's path a clicked point boards, or -1 if it does not. */
+function boardingStop(path, latlng) {
+  const stops = RIDES.paths.stops;
+  let best = -1;
+  let bestDist = RIDE_NEAR_M;
+  for (let i = 0; i < path.length; i++) {
+    const stop = stops[path[i]];
+    if (!stop) continue;
+    const d = metresBetween(latlng.lat, latlng.lng, stop[0], stop[1]);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  return { index: best, distance: bestDist };
+}
+
+/**
+ * Every route-direction running from A to B, timed on its own observations.
+ *
+ * A route counts only if both ends are near stops on its path *and* they are
+ * in path order — the same pair of points is a different journey, on a
+ * different set of legs, in the other direction.
+ */
+function rideOptions(a, b) {
+  if (!RIDES.paths || !RIDES.data) return [];
+  const metric = rideMetric();
+  const out = [];
+
+  for (const route of RIDES.paths.routes) {
+    const legs = RIDES.data[`${route.route}|${route.dir}`];
+    if (!legs) continue;
+    const from = boardingStop(route.path, a);
+    const to = boardingStop(route.path, b);
+    if (from.index < 0 || to.index < 0 || from.index >= to.index) continue;
+
+    const values = legs[metric] || legs.med;
+    const slice = values.slice(from.index, to.index);
+    const known = slice.filter((v) => v != null);
+    if (!known.length) continue;
+    // A leg nobody was observed on takes this route's own average leg instead
+    // of vanishing, which would make a gappy route look like the fast one.
+    const fill = known.reduce((sum, v) => sum + v, 0) / known.length;
+    out.push({
+      route,
+      seconds: slice.reduce((sum, v) => sum + (v == null ? fill : v), 0),
+      stops: to.index - from.index,
+      holes: slice.length - known.length,
+      observations: Math.min(...legs.n.slice(from.index, to.index)),
+      walk: from.distance + to.distance,
+      from: from.index,
+      to: to.index,
+    });
+  }
+  // Ordered by the whole journey, not the bus part of it: a route two minutes
+  // quicker that leaves you 600 m further from the door is not quicker.
+  return out.sort((x, y) => x.seconds + walkSeconds(x.walk) - (y.seconds + walkSeconds(y.walk)));
+}
+
+function highlightRide(option) {
+  if (RIDES.highlight) {
+    RULER.layer.removeLayer(RIDES.highlight);
+    RIDES.highlight = null;
+  }
+  if (!option) return;
+  const stops = RIDES.paths.stops;
+  const points = option.route.path
+    .slice(option.from, option.to + 1)
+    .map((id) => stops[id])
+    .filter(Boolean)
+    .map((s) => [s[0], s[1]]);
+  RIDES.highlight = L.polyline(points, {
+    color: "#3b6ea5",
+    weight: 5,
+    opacity: 0.8,
+    interactive: false,
+  }).addTo(RULER.layer);
+}
+
+function rideRow(option, i) {
+  const stops = RIDES.paths.stops;
+  const board = stops[option.route.path[option.from]];
+  const alight = stops[option.route.path[option.to]];
+  const walk = Math.round(option.walk);
+  return (
+    `<button type="button" class="ride-row" data-ride="${i}">` +
+    `<span class="ride-name">${option.route.name}</span>` +
+    `<span class="ride-time">${formatDuration(option.seconds)}</span>` +
+    `<span class="ride-detail">${board ? board[2] : "?"} → ${alight ? alight[2] : "?"}<br>` +
+    `${option.stops} stop${option.stops === 1 ? "" : "s"} · ${walk} m walk ` +
+    `(${formatDuration(walkSeconds(option.walk))}) · ${option.observations} rides seen` +
+    `${option.holes ? ` · ${option.holes} leg(s) unobserved` : ""}</span>` +
+    `</button>`
+  );
+}
+
+function ridesReadout() {
+  if (!index.rides) return "";
+  if (RULER.points.length < 2) return "";
+  // Stale figures from the previous hour are worse than none while the new
+  // ones are on their way.
+  if (!RIDES.paths || !RIDES.data || RIDES.key !== ridesKey()) {
+    return `<div class="ride-empty">looking for buses…</div>`;
+  }
+
+  const options = rideOptions(RULER.points[0], RULER.points[RULER.points.length - 1]);
+  if (!options.length) {
+    return (
+      `<div class="ride-empty">No bus runs from the first end to the last one — ` +
+      `no route has a stop within ${RIDE_NEAR_M} m of both, in that order.</div>`
+    );
+  }
+  const shown = options.slice(0, RIDE_ROWS).map(rideRow).join("");
+  const rest = options.length - RIDE_ROWS;
+  const source = rideMetric() === "avg" ? "average" : "median";
+  const note =
+    els.rulerMetric.value === "v" || els.rulerMetric.value === "med"
+      ? `${source} of observed rides`
+      : `${source} of observed rides — no percentile is measured here`;
+  return (
+    `<div class="ride-head">On the bus <span>${note}</span></div>` +
+    shown +
+    (rest > 0 ? `<div class="ride-more">${rest} slower route${rest === 1 ? "" : "s"}</div>` : "")
+  );
+}
+
+// The route list and the geometry are only fetched once the ruler is used, and
+// the geometry only ever once — it does not change with the selection.
+async function loadRides() {
+  const key = ridesKey();
+  // Dragging a point redraws on every frame; without the flag each frame would
+  // queue another pair of loads for the same selection.
+  RIDES.loading = true;
+  try {
+    const [paths, data] = await Promise.all([
+      RIDES.paths ? RIDES.paths : fetchSelection("paths"),
+      RIDES.key === key && RIDES.data ? RIDES.data : fetchSelection(key),
+    ]);
+    RIDES.paths = paths;
+    RIDES.data = data;
+    RIDES.key = key;
+  } finally {
+    RIDES.loading = false;
+  }
+}
+
 function rulerReadout() {
   if (RULER.points.length === 0) {
     return "Click the map to drop the first end.";
@@ -646,6 +832,22 @@ function rulerReadout() {
 function rulerRedraw() {
   if (RULER.line) RULER.line.setLatLngs(RULER.points);
   els.rulerFigures.innerHTML = rulerReadout();
+  // Re-rendering the list drops the active row, so the stretch it drew goes
+  // with it rather than hanging over a line that has since moved.
+  highlightRide(null);
+  els.rides.innerHTML = ridesReadout();
+  if (index.rides && RULER.points.length >= 2 && !RIDES.loading && RIDES.key !== ridesKey()) {
+    // Fetched on demand, and only the first time a line is drawn — the ride
+    // files and the route geometry are dead weight for a visitor who only ever
+    // looks at the map.
+    loadRides()
+      .then(() => {
+        els.rides.innerHTML = ridesReadout();
+      })
+      .catch(() => {
+        els.rides.innerHTML = `<div class="ride-empty">ride times unavailable</div>`;
+      });
+  }
 }
 
 function rulerAddPoint(latlng) {
@@ -679,6 +881,7 @@ function rulerClear() {
   RULER.vertices.forEach((marker) => RULER.layer.removeLayer(marker));
   RULER.vertices = [];
   RULER.points = [];
+  highlightRide(null);
   rulerRedraw();
 }
 
@@ -747,6 +950,23 @@ function rulerBoot() {
 
   els.rulerMetric.addEventListener("change", rulerRedraw);
   els.rulerClear.addEventListener("click", rulerClear);
+
+  // Picking a route draws the stretch of it being timed, which is the only way
+  // to see that the fast one is fast because it runs a different street.
+  els.rides.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-ride]");
+    if (!row) return;
+    const options = rideOptions(RULER.points[0], RULER.points[RULER.points.length - 1]);
+    const chosen = options[Number(row.dataset.ride)];
+    const already = row.classList.contains("active");
+    els.rides.querySelectorAll(".ride-row").forEach((r) => r.classList.remove("active"));
+    if (already || !chosen) {
+      highlightRide(null);
+      return;
+    }
+    row.classList.add("active");
+    highlightRide(chosen);
+  });
   document.addEventListener("keydown", (e) => {
     if (!RULER.on) return;
     if (e.key === "Escape") {

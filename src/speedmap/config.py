@@ -100,6 +100,31 @@ REL_SCALE_HIGH = _float("REL_SCALE_HIGH", 1.0)
 SPREAD_SCALE_LOW_KMH = _float("SPREAD_SCALE_LOW_KMH", 5.0)
 SPREAD_SCALE_HIGH_KMH = _float("SPREAD_SCALE_HIGH_KMH", 30.0)
 
+# --- Real ride times (see segments.py) -----------------------------------
+# The speed map integrates a speed field and excludes stops by design, so it
+# cannot say how long a ride takes. These govern the other pass, which follows
+# individual vehicles between consecutive stops and keeps the elapsed time —
+# dwell, lights and all.
+#
+# A pass counts when a vehicle comes within this of a stop on its route's path.
+# Wider than STOP_RADIUS_M: here a stop is a landmark to time against rather
+# than a zone to exclude, and a bus held short of a crowded stop still passed it.
+STOP_PASS_RADIUS_M = _float("STOP_PASS_RADIUS_M", 60.0)
+# A vehicle keeps its trip_id across a layover, so one id can cover a there and
+# a back. A silence this long ends the run.
+RUN_GAP_MAX_S = _int("RUN_GAP_MAX_S", 600)
+# A leg between two adjacent stops that takes longer than this is not a leg —
+# it is a bus that broke down, was pulled from service, or sat out a diversion.
+SEG_MAX_S = _int("SEG_MAX_S", 1800)
+# An unobserved hole inside a leg. The feed drops out for minutes at a time, and
+# a leg spanning a hole may not be the leg it looks like.
+SEG_GAP_MAX_S = _int("SEG_GAP_MAX_S", 240)
+# Leg-time histogram resolution, the same trick the speed histograms use to
+# answer a median without keeping every observation.
+SEG_BIN_S = _float("SEG_BIN_S", 5.0)
+# Below this many observations a leg's median is one bus having a bad morning.
+SEG_MIN_OBS = _int("SEG_MIN_OBS", 5)
+
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 # Speed histograms are kept alongside the sums so the map can show a median (or
@@ -109,6 +134,11 @@ HIST_BIN_KMH = _float("HIST_BIN_KMH", 1.0)
 
 AGG_DIR = DATA_DIR / "agg"
 HIST_DIR = DATA_DIR / "hist"
+SEG_DIR = DATA_DIR / "seg"
+SEG_HIST_DIR = DATA_DIR / "seghist"
 STATIC_CACHE_DIR = DATA_DIR / "static_cache"
 DEPOT_FILE = DATA_DIR / "depots.json"
+# Route paths and stop geometry, snapshotted by segments.py so build_web can lay
+# the leg times out in order without reaching for R2.
+PATHS_FILE = DATA_DIR / "paths.json"
 WEB_DATA_DIR = ROOT / "web" / "data"

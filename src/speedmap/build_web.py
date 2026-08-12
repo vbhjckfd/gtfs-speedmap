@@ -8,7 +8,12 @@ every axis:
     web/data/all-we-17.json           every month, weekends, 17:00–17:59
     web/data/all-all-all.json         everything
     web/data/profile-all-wd.json      per-cell speed by hour, for the popup
+    web/data/rides-all-wd-08.json     observed leg times per route, same selection
+    web/data/paths.json               route paths and stop geometry, once
     web/data/index.json               menu contents, metrics, colour scales
+
+The ride files are written only when segments.py has produced leg times; the
+speed map predates them and still builds without them.
 
 Run: python -m speedmap.build_web
 """
@@ -32,6 +37,12 @@ from .config import (
     HIST_BIN_KMH,
     HIST_DIR,
     MIN_SAMPLES,
+    PATHS_FILE,
+    SEG_BIN_S,
+    SEG_DIR,
+    SEG_HIST_DIR,
+    SEG_MIN_OBS,
+    STOP_PASS_RADIUS_M,
     PROFILE_MIN_HOURS,
     PROFILE_MIN_SAMPLES,
     REL_MIN_FF_KMH,
@@ -194,22 +205,31 @@ def _combine(slices: dict, month: str, daytype: str, keys: list[str]) -> pd.Data
     ].sum()
 
 
-def _percentiles(bins: pd.DataFrame, quantiles: tuple[float, ...]) -> dict[float, pd.Series]:
-    """Several percentile speeds per (cx, cy), read off the cumulative histogram.
+def _percentiles(
+    bins: pd.DataFrame,
+    quantiles: tuple[float, ...],
+    keys: list[str] | None = None,
+    width: float = HIST_BIN_KMH,
+) -> dict[float, pd.Series]:
+    """Several percentiles per group, read off the cumulative histogram.
 
     Resolution is the bin width, so each answer is the centre of the bin the
     q-th sample falls in. The sort and the cumulative sum are the expensive part
     and do not depend on q, so every quantile shares one pass — at three
     percentiles across 300 payloads, doing it per quantile is three times the
     work for the same result.
+
+    Cells and their speeds are the usual caller; leg times per stop pair are the
+    other one, which is why the group keys and the bin width are arguments.
     """
+    keys = keys or CELL_KEYS
     if bins.empty:
         return {q: pd.Series(dtype=float) for q in quantiles}
 
-    cells = bins.groupby(CELL_KEYS, sort=False)["n"].sum().rename("total")
-    ordered = bins.sort_values(CELL_KEYS + ["bin"])
-    ordered["cumulative"] = ordered.groupby(CELL_KEYS, sort=False)["n"].cumsum()
-    ordered = ordered.join(cells, on=CELL_KEYS)
+    groups = bins.groupby(keys, sort=False)["n"].sum().rename("total")
+    ordered = bins.sort_values(keys + ["bin"])
+    ordered["cumulative"] = ordered.groupby(keys, sort=False)["n"].cumsum()
+    ordered = ordered.join(groups, on=keys)
 
     out = {}
     for q in quantiles:
@@ -218,13 +238,18 @@ def _percentiles(bins: pd.DataFrame, quantiles: tuple[float, ...]) -> dict[float
         # this is (total+1)//2, the lower of the two middles on an even count.
         target = np.maximum(1, np.ceil(ordered["total"] * q))
         reached = ordered[ordered["cumulative"] >= target]
-        first = reached.groupby(CELL_KEYS, sort=False)["bin"].first()
-        out[q] = (first + 0.5) * HIST_BIN_KMH
+        first = reached.groupby(keys, sort=False)["bin"].first()
+        out[q] = (first + 0.5) * width
     return out
 
 
-def _percentile(bins: pd.DataFrame, q: float) -> pd.Series:
-    return _percentiles(bins, (q,))[q]
+def _percentile(
+    bins: pd.DataFrame,
+    q: float,
+    keys: list[str] | None = None,
+    width: float = HIST_BIN_KMH,
+) -> pd.Series:
+    return _percentiles(bins, (q,), keys=keys, width=width)[q]
 
 
 def _medians(bins: pd.DataFrame) -> pd.Series:
@@ -416,6 +441,104 @@ def _profile(group: pd.DataFrame, hours: list[int]) -> dict:
     }
 
 
+SEG_KEYS = ["route_id", "direction", "from_stop", "to_stop"]
+SEG_SUMS = ["n", "sum_s"]
+
+
+def load_ride_slices() -> tuple[dict, dict, list[dict], dict]:
+    """Observed leg times, bucketed into the same (month, daytype) slices.
+
+    Returns empty structures when segments.py has not run — the speed map is
+    the older half of this build and must not depend on the newer one.
+    """
+    paths_payload = json.loads(PATHS_FILE.read_text(encoding="utf-8")) if PATHS_FILE.exists() else {}
+    paths = paths_payload.get("routes", [])
+    stops = paths_payload.get("stops", {})
+
+    leg_paths = sorted(SEG_DIR.glob("*.parquet")) if SEG_DIR.exists() else []
+    if not leg_paths or not paths:
+        return {}, {}, paths, stops
+
+    leg_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
+    bin_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
+    for path in leg_paths:
+        day = path.stem
+        legs = pd.read_parquet(path)
+        hist_path = SEG_HIST_DIR / path.name
+        for month, part in legs.groupby("month", sort=False):
+            leg_parts.setdefault(_slice_key(day, month), []).append(part)
+        if hist_path.exists():
+            for month, part in pd.read_parquet(hist_path).groupby("month", sort=False):
+                bin_parts.setdefault(_slice_key(day, month), []).append(part)
+
+    leg_slices = {
+        key: pd.concat(parts, ignore_index=True)
+        .groupby(["hour", *SEG_KEYS], as_index=False, sort=False)[SEG_SUMS]
+        .sum()
+        for key, parts in leg_parts.items()
+    }
+    bin_slices = {
+        key: pd.concat(parts, ignore_index=True)
+        .groupby(["hour", *SEG_KEYS, "bin"], as_index=False, sort=False)["n"]
+        .sum()
+        for key, parts in bin_parts.items()
+    }
+    return leg_slices, bin_slices, paths, stops
+
+
+def _combine_rides(slices: dict, month: str, daytype: str, keys: list[str]) -> pd.DataFrame:
+    parts = [
+        frame
+        for (m, d), frame in slices.items()
+        if (month == ALL or m == month) and (daytype == ALL or d == daytype)
+    ]
+    columns = ["n"] if "bin" in keys else SEG_SUMS
+    if not parts:
+        return pd.DataFrame(columns=keys + columns)
+    if len(parts) == 1:
+        return parts[0]
+    return pd.concat(parts, ignore_index=True).groupby(keys, as_index=False, sort=False)[
+        columns
+    ].sum()
+
+
+def _rides(legs: pd.DataFrame, bins: pd.DataFrame, paths: list[dict]) -> dict:
+    """Per route-direction, one figure per leg of its path.
+
+    Laid out along the path rather than keyed by stop pair, so the viewer can
+    add up a range of legs by slicing. A leg with too few observations is null
+    rather than absent: the reader still needs to see the hole.
+    """
+    if legs.empty:
+        return {}
+
+    totals = legs.groupby(SEG_KEYS, sort=False)[SEG_SUMS].sum()
+    counts = totals["n"].to_dict()
+    means = (totals["sum_s"] / totals["n"]).to_dict()
+    medians = _percentile(bins, 0.5, keys=SEG_KEYS, width=SEG_BIN_S).to_dict()
+
+    out = {}
+    for route in paths:
+        key = (route["route"], route["dir"])
+        path = route["path"]
+        med, avg, obs = [], [], []
+        for a, b in zip(path, path[1:]):
+            pair = (*key, a, b)
+            n = int(counts.get(pair, 0))
+            obs.append(n)
+            if n < SEG_MIN_OBS:
+                med.append(None)
+                avg.append(None)
+                continue
+            median = medians.get(pair)
+            med.append(None if median is None or np.isnan(median) else round(float(median)))
+            avg.append(round(float(means[pair])))
+        if not any(obs):
+            continue
+        out[f"{key[0]}|{key[1]}"] = {"med": med, "avg": avg, "n": obs}
+    return out
+
+
 _WRITTEN: set[str] = set()
 
 
@@ -441,6 +564,7 @@ def _sweep() -> int:
 
 def build() -> None:
     cell_slices, hist_slices, days = load_base_slices()
+    leg_slices, seg_bin_slices, paths, stops = load_ride_slices()
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     months = sorted({month for month, _ in cell_slices})
@@ -480,6 +604,30 @@ def build() -> None:
             file_count += 1
             del selection, bins
 
+            if leg_slices:
+                legs = _combine_rides(leg_slices, month, daytype, ["hour", *SEG_KEYS])
+                seg_bins = _combine_rides(
+                    seg_bin_slices, month, daytype, ["hour", *SEG_KEYS, "bin"]
+                )
+                for hour in [*hours, ALL]:
+                    if hour == ALL:
+                        part, part_bins = legs, seg_bins
+                    else:
+                        part = legs[legs["hour"] == hour]
+                        part_bins = seg_bins[seg_bins["hour"] == hour]
+                    hour_key = ALL if hour == ALL else f"{hour:02d}"
+                    total_bytes += _write(
+                        f"rides-{month}-{daytype}-{hour_key}", _rides(part, part_bins, paths)
+                    )
+                    file_count += 1
+                del legs, seg_bins
+
+    if paths:
+        # Geometry is the same whatever selection is on screen, so it ships once
+        # and the per-selection files carry nothing but numbers.
+        total_bytes += _write("paths", {"stops": stops, "routes": paths})
+        file_count += 1
+
     index = {
         "generated": date.today().isoformat(),
         "timezone": TZ,
@@ -490,6 +638,19 @@ def build() -> None:
         "metrics": _metric_descriptors(),
         "hist_bin_kmh": HIST_BIN_KMH,
         "free_flow_q": FREE_FLOW_Q,
+        # Absent until segments.py has run, which is what the viewer keys the
+        # whole ride-time feature off.
+        "rides": bool(leg_slices)
+        and {
+            "stop_pass_radius_m": STOP_PASS_RADIUS_M,
+            "min_observations": SEG_MIN_OBS,
+            "bin_s": SEG_BIN_S,
+            "routes": len(paths),
+            "metrics": [
+                {"key": "med", "label": "Median"},
+                {"key": "avg", "label": "Average"},
+            ],
+        },
         # Kept for viewers built before per-metric scales existed.
         "scale": {"low_kmh": SCALE_LOW_KMH, "high_kmh": SCALE_HIGH_KMH},
         "hours": hours,

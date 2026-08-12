@@ -11,10 +11,11 @@ from speedmap.build_web import (
     _percentile,
     _percentiles,
     _profile,
+    _rides,
     daytype_of,
     free_flow,
 )
-from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES
+from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES, SEG_MIN_OBS
 
 
 def bins(rows: list[tuple[int, int, int, int]]) -> pd.DataFrame:
@@ -202,3 +203,60 @@ def test_profile_marks_unmeasured_hours_rather_than_guessing():
     profile = _profile(cells_by_hour(rows), hours)
     assert profile["q"][1] == profile["no_data"]
     assert profile["q"][0] == 18
+
+
+# --- Real ride times ------------------------------------------------------
+
+RIDE_PATHS = [{"route": "R1", "dir": "0", "name": "А25", "path": ["A", "B", "C"]}]
+
+
+def legs(rows: list[tuple[str, str, int, int]]) -> pd.DataFrame:
+    """rows of (from_stop, to_stop, n, sum_s)."""
+    return pd.DataFrame(
+        [("2026-07", 8, "R1", "0", a, b, n, s) for a, b, n, s in rows],
+        columns=["month", "hour", "route_id", "direction", "from_stop", "to_stop", "n", "sum_s"],
+    )
+
+
+def leg_bins(rows: list[tuple[str, str, int, int]]) -> pd.DataFrame:
+    """rows of (from_stop, to_stop, bin, count)."""
+    return pd.DataFrame(
+        [("2026-07", 8, "R1", "0", a, b, k, n) for a, b, k, n in rows],
+        columns=[
+            "month", "hour", "route_id", "direction", "from_stop", "to_stop", "bin", "n",
+        ],
+    )
+
+
+def test_rides_lay_out_along_the_path():
+    frame = legs([("A", "B", 10, 1200), ("B", "C", 10, 600)])
+    bins_frame = leg_bins([("A", "B", 24, 10), ("B", "C", 12, 10)])
+    out = _rides(frame, bins_frame, RIDE_PATHS)
+
+    assert list(out) == ["R1|0"]
+    assert out["R1|0"]["avg"] == [120, 60]  # sum_s / n
+    # Bin 24 at 5 s per bin holds 120–125 s and is reported as its centre,
+    # 122.5 s, rounded to whole seconds on the way into the JSON.
+    assert out["R1|0"]["med"] == [122, 62]
+    assert out["R1|0"]["n"] == [10, 10]
+
+
+def test_a_leg_with_too_few_observations_is_a_hole_not_a_guess():
+    frame = legs([("A", "B", SEG_MIN_OBS - 1, 100), ("B", "C", 10, 600)])
+    bins_frame = leg_bins([("A", "B", 4, SEG_MIN_OBS - 1), ("B", "C", 12, 10)])
+    out = _rides(frame, bins_frame, RIDE_PATHS)
+
+    assert out["R1|0"]["med"][0] is None
+    assert out["R1|0"]["avg"][0] is None
+    # The observation count is still reported, so the viewer can say why.
+    assert out["R1|0"]["n"] == [SEG_MIN_OBS - 1, 10]
+
+
+def test_a_route_nobody_was_seen_on_is_left_out():
+    frame = legs([("A", "B", 10, 1200)])
+    other = [{"route": "R2", "dir": "0", "name": "А99", "path": ["A", "B"]}]
+    assert _rides(frame, leg_bins([("A", "B", 24, 10)]), other) == {}
+
+
+def test_rides_of_nothing_is_nothing():
+    assert _rides(legs([]), leg_bins([]), RIDE_PATHS) == {}
