@@ -569,11 +569,17 @@ function ridesKey() {
   return `rides-${els.month.value}-${els.daytype.value}-${hourKey()}`;
 }
 
-// Median or average of the observed leg times, whichever the dropdown says.
-// The median is the default: journey times are right-skewed, so one bus that
-// broke down moves the average and leaves the median alone.
+// Average or median of the observed leg times, whichever the dropdown says.
+//
+// The average is the default, and it is the one to trust for a journey. Only
+// the mean is additive: the sum of a route's per-leg means is the mean of the
+// whole ride, while the sum of its per-leg medians is *not* the median of the
+// ride — legs are right-skewed and a bus late on one is late on the next, so
+// the medians add up short. Measured on Рясне-2 → Ковча at 08:00, ten legs:
+// the summed medians said 22 minutes where the vehicles themselves took 25–26,
+// while the summed means said 25.
 function rideMetric() {
-  return els.rulerMetric.value === "avg" ? "avg" : "med";
+  return els.rulerMetric.value === "med" ? "med" : "avg";
 }
 
 function metresBetween(lat1, lon1, lat2, lon2) {
@@ -1052,7 +1058,7 @@ function rulerBoot() {
     option.textContent = metric.label;
     els.rulerMetric.append(option);
   }
-  els.rulerMetric.value = "med";
+  els.rulerMetric.value = "avg";
 
   els.rulerMetric.addEventListener("change", rulerRedraw);
   els.rulerClear.addEventListener("click", rulerClear);

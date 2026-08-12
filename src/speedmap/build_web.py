@@ -646,9 +646,13 @@ def build() -> None:
             "min_observations": SEG_MIN_OBS,
             "bin_s": SEG_BIN_S,
             "routes": len(paths),
+            # Average first, and the default: only the mean is additive, so a
+            # journey summed from per-leg medians comes out short. Measured on
+            # Рясне-2 → Ковча at 08:00 over ten legs, summed medians said 22
+            # minutes against 25-26 for the vehicles themselves.
             "metrics": [
-                {"key": "med", "label": "Median"},
                 {"key": "avg", "label": "Average"},
+                {"key": "med", "label": "Median"},
             ],
         },
         # Kept for viewers built before per-metric scales existed.

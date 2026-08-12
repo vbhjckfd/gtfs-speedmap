@@ -230,11 +230,33 @@ Routes are listed fastest first, each with the stops it boards and alights at an
 figure rests on. A leg nobody was seen running in that selection is filled with the route's own
 average leg and the row says how many of them were. Picking a route draws the stretch being timed.
 
+### Why the average is the default
+
+Only the mean is additive. The sum of a route's per-leg means is the mean of the whole ride; the
+sum of its per-leg medians is **not** the median of the ride, because leg times are right-skewed and
+a bus that is late on one leg is late on the next. Over a ten-leg journey that compounds into a
+figure that is simply too fast, which is exactly how the bug was reported.
+
+Measured against the vehicles themselves — Рясне-2 → Ковча, ten legs, departures in the 08:00 hour
+of six July weekdays, journeys reconstructed from the raw archive rather than from any aggregate:
+
+| route | Σ leg medians | Σ leg means | real journey median | real journey mean |
+|---|---|---|---|---|
+| А06 | 22.1 | 25.1 | **26.0** | 26.4 |
+| А11 | 22.2 | 24.7 | **25.3** | 26.4 |
+| А49 | 23.2 | 24.1 | **22.1** | 25.0 |
+
+The summed mean lands within about 5% of the real journey; the summed median runs 10–15% short.
+The residual on the mean is legs the run never produced a pass pair for — 13% of А06's legs, which
+is 19% of its clock — filled in from other runs.
+
+The median is still offered, because for a *single* leg it is the more robust figure. It is the sum
+that misleads.
+
 Three things it does not claim. It does not know when the next bus leaves, so waiting time is
-absent and a route running every 40 minutes reads the same as one every 6. Summing per-leg medians
-is not the median of the total — the average is additive and exact, the median is a good estimate
-that assumes a bad leg does not predict the next one. And a part-leg is priced by distance, so a stretch
-that stops short of a stop is charged an even share of that leg rather than the queue at its end.
+absent and a route running every 40 minutes reads the same as one every 6. A part-leg is priced by
+distance, so a stretch that stops short of a stop is charged an even share of that leg rather than
+the queue at its end. And the figures describe the buses that ran, not the timetable.
 
 ## Keeping it current
 
