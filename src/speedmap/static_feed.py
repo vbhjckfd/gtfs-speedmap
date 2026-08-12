@@ -31,12 +31,18 @@ from collections import defaultdict
 from typing import NamedTuple
 
 from . import r2
-from .config import STATIC_CACHE_DIR, STOP_BUCKET_M
+from .config import (
+    SHAPE_TOLERANCE_M,
+    STATIC_CACHE_DIR,
+    STOP_BUCKET_M,
+    STOP_MATCH_MAX_M,
+)
+from .geometry import cumulative, match_stops, simplify
 from .utm import project_xy
 
 TROLLEYBUS_PREFIX = "Тр"  # Cyrillic Т + р
 BUS_ROUTE_TYPE = "3"
-CACHE_VERSION = 2  # bump when StaticFeed gains or loses a field
+CACHE_VERSION = 3  # bump when StaticFeed gains or loses a field
 
 
 class StaticFeed(NamedTuple):
@@ -68,6 +74,12 @@ class StaticFeed(NamedTuple):
     route_dir_path: dict[tuple[str, str], tuple[str, ...]]
     route_names: dict[str, str]
     stop_names: dict[str, str]
+    # The street the route actually follows, simplified, as (lat, lon). Stops
+    # give the times a place to be measured; the shape gives them a line to be
+    # spread along, so a rider can ask about two points rather than two stops.
+    route_dir_shape: dict[tuple[str, str], tuple[tuple[float, float], ...]]
+    # Distance in metres along that shape of each stop in `route_dir_path`.
+    route_dir_stop_dist: dict[tuple[str, str], tuple[float, ...]]
 
     def pattern_for(self, trip_id: str, route_id: str) -> int | None:
         """This trip's pattern; falls back to the route's pattern in this
@@ -118,6 +130,28 @@ def _read_csv(zf: zipfile.ZipFile, name: str):
         yield from csv.DictReader(io.TextIOWrapper(fh, encoding="utf-8-sig"))
 
 
+def _read_shapes(
+    zf: zipfile.ZipFile, wanted: set[str]
+) -> dict[str, list[tuple[float, float]]]:
+    """The wanted shapes as ordered (lat, lon). Absent from a feed without them."""
+    if not wanted or "shapes.txt" not in zf.namelist():
+        return {}
+    rows: dict[str, list[tuple[int, float, float]]] = defaultdict(list)
+    for row in _read_csv(zf, "shapes.txt"):
+        if row["shape_id"] in wanted:
+            rows[row["shape_id"]].append(
+                (
+                    int(row["shape_pt_sequence"]),
+                    float(row["shape_pt_lat"]),
+                    float(row["shape_pt_lon"]),
+                )
+            )
+    return {
+        shape_id: [(lat, lon) for _, lat, lon in sorted(points)]
+        for shape_id, points in rows.items()
+    }
+
+
 def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
     zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
 
@@ -129,11 +163,14 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
     }
     bus_route_ids = frozenset(route_names)
 
-    trip_meta = {
-        t["trip_id"]: (t["route_id"], t["direction_id"])
-        for t in _read_csv(zf, "trips.txt")
-        if t["route_id"] in bus_route_ids
-    }
+    trip_meta: dict[str, tuple[str, str]] = {}
+    trip_shape: dict[str, str] = {}
+    for t in _read_csv(zf, "trips.txt"):
+        if t["route_id"] not in bus_route_ids:
+            continue
+        trip_meta[t["trip_id"]] = (t["route_id"], t["direction_id"])
+        if t.get("shape_id"):
+            trip_shape[t["trip_id"]] = t["shape_id"]
 
     # stop_times.txt is ~17 MB and not grouped in any guaranteed order.
     seq_by_trip: dict[str, list[tuple[int, str]]] = defaultdict(list)
@@ -172,6 +209,7 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
     route_dir_stops: dict[tuple[str, str], set[str]] = defaultdict(set)
     route_dir_terminals: dict[tuple[str, str], set[str]] = defaultdict(set)
     route_dir_path: dict[tuple[str, str], tuple[str, ...]] = {}
+    canonical_shape: dict[tuple[str, str], str | None] = {}
     for trip_id, seq in seq_by_trip.items():
         ordered = tuple(stop_id for _, stop_id in sorted(seq))
         stops = frozenset(ordered)
@@ -181,9 +219,11 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
         route_dir_stops[route_dir].update(stops)
         route_dir_terminals[route_dir].update(terminals)
         # The longest variant is the one that reaches both ends of the line;
-        # short turns are a prefix or a suffix of it.
+        # short turns are a prefix or a suffix of it. Its shape is the one the
+        # times are laid out along, for the same reason.
         if len(ordered) > len(route_dir_path.get(route_dir, ())):
             route_dir_path[route_dir] = ordered
+            canonical_shape[route_dir] = trip_shape.get(trip_id)
 
     # The fallback pattern for a trip this schedule has never heard of. Its stop
     # set is a union across every variant, so it carries no sequence — anything
@@ -210,6 +250,30 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
     for stop_id, (x, y) in stop_xy.items():
         buckets[(int(x // STOP_BUCKET_M), int(y // STOP_BUCKET_M))].append(stop_id)
 
+    shape_points = _read_shapes(zf, set(filter(None, canonical_shape.values())))
+    route_dir_shape: dict[tuple[str, str], tuple[tuple[float, float], ...]] = {}
+    route_dir_stop_dist: dict[tuple[str, str], tuple[float, ...]] = {}
+    for route_dir, path in route_dir_path.items():
+        points = shape_points.get(canonical_shape.get(route_dir) or "")
+        if not points or len(points) < 2:
+            continue
+        projected = [project_xy(lon, lat) for lat, lon in points]
+        kept = simplify(projected, SHAPE_TOLERANCE_M)
+        points = [points[i] for i in kept]
+        projected = [projected[i] for i in kept]
+        cum = cumulative(projected)
+
+        # Matched as a sequence, so the stops land on the pass of the shape they
+        # are actually served from and stay in order along it.
+        stops_xy = [stop_xy.get(stop_id) for stop_id in path]
+        if any(xy is None for xy in stops_xy):
+            continue
+        distances = match_stops(projected, cum, stops_xy, STOP_MATCH_MAX_M)
+        if distances is None:
+            continue
+        route_dir_shape[route_dir] = tuple(points)
+        route_dir_stop_dist[route_dir] = tuple(distances)
+
     return StaticFeed(
         static_date=static_date,
         bus_route_ids=bus_route_ids,
@@ -221,6 +285,8 @@ def _build(static_date: str, zip_bytes: bytes) -> StaticFeed:
         stop_ll=stop_ll,
         stop_buckets={k: tuple(v) for k, v in buckets.items()},
         stop_seqs=stop_seqs,
+        route_dir_shape=route_dir_shape,
+        route_dir_stop_dist=route_dir_stop_dist,
         pattern_route=pattern_route,
         route_dir_path=route_dir_path,
         route_names=route_names,

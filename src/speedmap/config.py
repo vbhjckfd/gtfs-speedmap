@@ -124,6 +124,14 @@ SEG_GAP_MAX_S = _int("SEG_GAP_MAX_S", 240)
 SEG_BIN_S = _float("SEG_BIN_S", 5.0)
 # Below this many observations a leg's median is one bus having a bad morning.
 SEG_MIN_OBS = _int("SEG_MIN_OBS", 5)
+# Douglas-Peucker tolerance for the route shapes the viewer draws and projects
+# clicks onto. 8 m keeps every turn that matters at street scale and throws away
+# the GPS-trace detail between them.
+SHAPE_TOLERANCE_M = _float("SHAPE_TOLERANCE_M", 8.0)
+# How far off its route's shape a stop may sit and still be matched to it. Stop
+# points and shape points come from different sources and disagree by a lane or
+# a lay-by; beyond this the stop is not on this pass of the route.
+STOP_MATCH_MAX_M = _float("STOP_MATCH_MAX_M", 120.0)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"

@@ -336,14 +336,22 @@ def write_paths(client, date_str: str) -> int:
         if len(path) < 2:
             continue
         used.update(path)
-        routes.append(
-            {
-                "route": route_id,
-                "dir": direction,
-                "name": feed.route_names.get(route_id, route_id),
-                "path": list(path),
-            }
-        )
+        route = {
+            "route": route_id,
+            "dir": direction,
+            "name": feed.route_names.get(route_id, route_id),
+            "path": list(path),
+        }
+        # The street the route follows, and where along it each stop sits. With
+        # these the viewer can answer for two arbitrary points; without them it
+        # can only answer stop to stop, which is what routes lacking a usable
+        # shape fall back to.
+        shape = feed.route_dir_shape.get((route_id, direction))
+        distances = feed.route_dir_stop_dist.get((route_id, direction))
+        if shape and distances:
+            route["shape"] = [[round(lat, 5), round(lon, 5)] for lat, lon in shape]
+            route["dist"] = [round(d) for d in distances]
+        routes.append(route)
     payload = {
         "static_date": feed.static_date,
         "stops": {

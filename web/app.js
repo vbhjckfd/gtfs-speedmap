@@ -526,6 +526,7 @@ const RULER = {
   points: [],
   vertices: [],
   line: null,
+  arrow: null,
   layer: null,
 };
 
@@ -553,9 +554,15 @@ const RIDES = {
   expanded: false,
 };
 
-// How far a clicked point may be from a stop before that route is not really
-// serving it. Roughly a five-minute walk.
-const RIDE_NEAR_M = 500;
+// How far a clicked point may be from the route's own line before that route is
+// not really passing it. This is distance to the street the bus drives, not to a
+// stop, so it is far tighter than a walking radius would be — at 250 m a route
+// on the next street over qualified, and then reported its own longer way round.
+const RIDE_NEAR_M = 150;
+// And how far round the houses it may go between the two points, against the
+// straight line between them.
+const RIDE_DETOUR_MAX = 2.0;
+const RULER_PANE = "rulerPane";
 const RIDE_ROWS = 4;
 
 function ridesKey() {
@@ -575,21 +582,120 @@ function metresBetween(lat1, lon1, lat2, lon2) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-/** Where along a route's path a clicked point boards, or -1 if it does not. */
-function boardingStop(path, latlng) {
+/**
+ * The line a route drives and where each of its stops sits along it.
+ *
+ * Routes carry the schedule's own shape. The handful whose stops could not be
+ * matched to one fall back to the chain of their stops, which is the same idea
+ * at lower resolution: a line to measure position along.
+ */
+function routeLine(route) {
+  if (route.line) return route.line;
   const stops = RIDES.paths.stops;
-  let best = -1;
-  let bestDist = RIDE_NEAR_M;
-  for (let i = 0; i < path.length; i++) {
-    const stop = stops[path[i]];
-    if (!stop) continue;
-    const d = metresBetween(latlng.lat, latlng.lng, stop[0], stop[1]);
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
+  let points = route.shape;
+  let stopDist = route.dist;
+  if (!points || !stopDist) {
+    points = route.path.map((id) => stops[id]).filter(Boolean);
+    stopDist = [0];
+    for (let i = 1; i < points.length; i++) {
+      stopDist.push(
+        stopDist[i - 1] +
+          metresBetween(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1]),
+      );
     }
   }
-  return { index: best, distance: bestDist };
+  // Cumulative metres at each vertex, so a projection can be turned into a
+  // distance along the route in one step.
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) {
+    cum.push(
+      cum[i - 1] +
+        metresBetween(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1]),
+    );
+  }
+  route.line = { points, cum, stopDist };
+  return route.line;
+}
+
+/**
+ * Every place along a route's line that a point could be standing beside.
+ *
+ * More than one, because a route that runs out along a street and back down it
+ * passes the same spot twice, and the nearest of the two passes is not
+ * necessarily the one that gets you where you are going.
+ */
+function projectOnRoute(route, latlng, maxOff) {
+  const { points, cum } = routeLine(route);
+  const scale = Math.cos((latlng.lat * Math.PI) / 180) * METRES_PER_DEG_LAT;
+  const py = latlng.lat * METRES_PER_DEG_LAT;
+  const px = latlng.lng * scale;
+  const places = [];
+  let previous = Infinity;
+  let pending = null;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const ay = points[i][0] * METRES_PER_DEG_LAT;
+    const ax = points[i][1] * scale;
+    const by = points[i + 1][0] * METRES_PER_DEG_LAT;
+    const bx = points[i + 1][1] * scale;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const length2 = dx * dx + dy * dy;
+    let t = length2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / length2;
+    t = Math.max(0, Math.min(1, t));
+    const offX = px - (ax + t * dx);
+    const offY = py - (ay + t * dy);
+    const off = Math.sqrt(offX * offX + offY * offY);
+    const along = cum[i] + t * Math.sqrt(length2);
+
+    // Keep each local minimum: the point where the line stops approaching and
+    // starts leaving again is one pass of the route past this spot.
+    if (off <= previous) {
+      pending = off <= maxOff ? { along, off } : null;
+    } else if (pending) {
+      places.push(pending);
+      pending = null;
+    }
+    previous = off;
+  }
+  if (pending) places.push(pending);
+  return places;
+}
+
+/**
+ * Time to cover the stretch between two distances along a route.
+ *
+ * The measurements are stop to stop, because that is where a vehicle's position
+ * stream can be timed reliably; the answer is for the two points asked about.
+ * A leg the stretch only partly covers is charged in proportion, which assumes
+ * an even pace across one leg — a 460 m block at the median.
+ */
+function timeAlongRoute(legs, stopDist, from, to, metric) {
+  const values = legs[metric] || legs.med;
+  const known = values.filter((v) => v != null);
+  if (!known.length) return null;
+  const fill = known.reduce((sum, v) => sum + v, 0) / known.length;
+
+  let seconds = 0;
+  let holes = 0;
+  let covered = 0;
+  for (let i = 0; i < values.length && i + 1 < stopDist.length; i++) {
+    const start = stopDist[i];
+    const end = stopDist[i + 1];
+    const span = end - start;
+    if (span <= 0) continue;
+    const overlap = Math.min(end, to) - Math.max(start, from);
+    if (overlap <= 0) continue;
+    const fraction = overlap / span;
+    if (values[i] == null) {
+      holes += 1;
+      seconds += fill * fraction;
+    } else {
+      seconds += values[i] * fraction;
+    }
+    covered += 1;
+  }
+  return covered ? { seconds, holes, legs: covered } : null;
 }
 
 /**
@@ -607,31 +713,74 @@ function rideOptions(a, b) {
   for (const route of RIDES.paths.routes) {
     const legs = RIDES.data[`${route.route}|${route.dir}`];
     if (!legs) continue;
-    const from = boardingStop(route.path, a);
-    const to = boardingStop(route.path, b);
-    if (from.index < 0 || to.index < 0 || from.index >= to.index) continue;
+    // Both points have to be on this route's street, and in the order it drives
+    // them: the same two points are a different journey the other way round.
+    const starts = projectOnRoute(route, a, RIDE_NEAR_M);
+    const ends = projectOnRoute(route, b, RIDE_NEAR_M);
+    if (!starts.length || !ends.length) continue;
 
-    const values = legs[metric] || legs.med;
-    const slice = values.slice(from.index, to.index);
-    const known = slice.filter((v) => v != null);
-    if (!known.length) continue;
-    // A leg nobody was observed on takes this route's own average leg instead
-    // of vanishing, which would make a gappy route look like the fast one.
-    const fill = known.reduce((sum, v) => sum + v, 0) / known.length;
+    // Of the passes that work, the shortest way round is the journey being
+    // asked about; a longer one is the route going somewhere else first.
+    let from = null;
+    let to = null;
+    for (const start of starts) {
+      for (const end of ends) {
+        if (end.along <= start.along) continue;
+        if (!from || end.along - start.along < to.along - from.along) {
+          from = start;
+          to = end;
+        }
+      }
+    }
+    if (!from) continue;
+    // A route that takes half the city to cover a straight kilometre is not a
+    // way of making this journey, whatever its clock says.
+    const direct = metresBetween(a.lat, a.lng, b.lat, b.lng);
+    if (to.along - from.along > direct * RIDE_DETOUR_MAX + RIDE_NEAR_M * 2) continue;
+
+    const { stopDist } = routeLine(route);
+    const timed = timeAlongRoute(legs, stopDist, from.along, to.along, metric);
+    if (!timed) continue;
+
+    // Which stops the stretch spans, for naming where a rider would get on and
+    // off — the time itself is between the points, not between these.
+    let board = 0;
+    let alight = stopDist.length - 1;
+    for (let i = 0; i < stopDist.length; i++) {
+      if (stopDist[i] <= from.along) board = i;
+      if (stopDist[i] <= to.along) alight = i;
+    }
+    const spanned = legs.n.slice(board, Math.max(board + 1, alight));
     out.push({
       route,
-      seconds: slice.reduce((sum, v) => sum + (v == null ? fill : v), 0),
-      stops: to.index - from.index,
-      holes: slice.length - known.length,
-      observations: Math.min(...legs.n.slice(from.index, to.index)),
-      from: from.index,
-      to: to.index,
+      seconds: timed.seconds,
+      metres: to.along - from.along,
+      stops: Math.max(0, alight - board),
+      holes: timed.holes,
+      legs: timed.legs,
+      observations: spanned.length ? Math.min(...spanned) : 0,
+      off: Math.max(from.off, to.off),
+      from: from.along,
+      to: to.along,
+      board,
+      alight,
     });
   }
-  // Ordered by the figure on screen. Every route here boards within
-  // RIDE_NEAR_M of the same point, so the walk is comparable between them and
-  // ranking by it as well would only reorder rows against their own numbers.
   return out.sort((x, y) => x.seconds - y.seconds);
+}
+
+/** The [lat, lon] sitting `along` metres into a polyline. */
+function pointAlong(points, cum, along) {
+  for (let i = 0; i < points.length - 1; i++) {
+    if (cum[i + 1] < along) continue;
+    const span = cum[i + 1] - cum[i];
+    const t = span === 0 ? 0 : (along - cum[i]) / span;
+    return [
+      points[i][0] + (points[i + 1][0] - points[i][0]) * t,
+      points[i][1] + (points[i + 1][1] - points[i][1]) * t,
+    ];
+  }
+  return points[points.length - 1];
 }
 
 function highlightRide(option) {
@@ -640,13 +789,17 @@ function highlightRide(option) {
     RIDES.highlight = null;
   }
   if (!option) return;
-  const stops = RIDES.paths.stops;
-  const points = option.route.path
-    .slice(option.from, option.to + 1)
-    .map((id) => stops[id])
-    .filter(Boolean)
-    .map((s) => [s[0], s[1]]);
-  RIDES.highlight = L.polyline(points, {
+  // The stretch being timed, cut out of the route's own line at the two
+  // distances rather than at the stops either side of them.
+  const { points, cum } = routeLine(option.route);
+  const slice = [];
+  for (let i = 0; i < points.length; i++) {
+    if (cum[i] > option.from && cum[i] < option.to) slice.push(points[i]);
+  }
+  slice.unshift(pointAlong(points, cum, option.from));
+  slice.push(pointAlong(points, cum, option.to));
+  RIDES.highlight = L.polyline(slice, {
+    pane: RULER_PANE,
     color: "#3b6ea5",
     weight: 5,
     opacity: 0.8,
@@ -656,16 +809,17 @@ function highlightRide(option) {
 
 function rideRow(option, i) {
   const stops = RIDES.paths.stops;
-  const board = stops[option.route.path[option.from]];
-  const alight = stops[option.route.path[option.to]];
+  const board = stops[option.route.path[option.board]];
+  const alight = stops[option.route.path[option.alight]];
+  const km = (option.metres / 1000).toFixed(1);
   return (
     `<button type="button" class="ride-row" data-ride="${i}">` +
     `<span class="ride-name">${option.route.name}</span>` +
     `<span class="ride-time">${formatDuration(option.seconds)}</span>` +
     `<span class="ride-detail">${board ? board[2] : "?"} → ${alight ? alight[2] : "?"}<br>` +
-    `${option.stops} stop${option.stops === 1 ? "" : "s"} · ${option.observations} rides seen` +
+    `${km} km · ${option.observations} rides seen` +
     // Only when part of the total is filled in rather than measured.
-    `${option.holes ? ` · ${option.holes} of ${option.stops} legs estimated` : ""}</span>` +
+    `${option.holes ? ` · ${option.holes} of ${option.legs} legs estimated` : ""}</span>` +
     `</button>`
   );
 }
@@ -688,7 +842,8 @@ function ridesReadout() {
   if (!options.length) {
     return (
       `<div class="ride-empty">No bus runs from the first end to the last one — ` +
-      `no route has a stop within ${RIDE_NEAR_M} m of both, in that order.</div>`
+      `no route passes within ${RIDE_NEAR_M} m of both, in that direction. ` +
+      `Try the other way round.</div>`
     );
   }
   // The slower ones are still ways of making the journey, so the tail folds
@@ -731,8 +886,37 @@ async function loadRides() {
   }
 }
 
+// Which way you are travelling decides which routes can carry you, so the line
+// carries an arrowhead at its midpoint rather than leaving the reader to infer
+// the direction from the order they happened to click in.
+function rulerArrow() {
+  if (RULER.arrow) {
+    RULER.layer.removeLayer(RULER.arrow);
+    RULER.arrow = null;
+  }
+  if (RULER.points.length < 2) return;
+  const [from, to] = [RULER.points[0], RULER.points[RULER.points.length - 1]];
+  const mid = L.latLng((from.lat + to.lat) / 2, (from.lng + to.lng) / 2);
+  const dy = (to.lat - from.lat) * METRES_PER_DEG_LAT;
+  const dx = (to.lng - from.lng) * METRES_PER_DEG_LAT * Math.cos((mid.lat * Math.PI) / 180);
+  const degrees = (Math.atan2(dx, dy) * 180) / Math.PI; // 0 = north, clockwise
+  RULER.arrow = L.marker(mid, {
+    interactive: false,
+    keyboard: false,
+    icon: L.divIcon({
+      className: "ruler-arrow",
+      iconSize: [18, 18],
+      html:
+        `<svg viewBox="0 0 18 18" width="18" height="18" ` +
+        `style="transform: rotate(${degrees.toFixed(1)}deg)">` +
+        `<path d="M9 1 L15 15 L9 11.5 L3 15 Z" fill="#16202a"/></svg>`,
+    }),
+  }).addTo(RULER.layer);
+}
+
 function rulerRedraw() {
   if (RULER.line) RULER.line.setLatLngs(RULER.points);
+  rulerArrow();
   // Re-rendering the list drops the active row, so the stretch it drew goes
   // with it rather than hanging over a line that has since moved.
   highlightRide(null);
@@ -833,8 +1017,13 @@ const RulerControl = L.Control.extend({
 });
 
 function rulerBoot() {
+  // The dots are a canvas inside the overlay pane, and whatever is appended
+  // there last wins — which was the canvas, burying the ruler's own lines under
+  // forty thousand dots. Its own pane above them settles it.
+  map.createPane(RULER_PANE).style.zIndex = 620;
   RULER.layer = L.layerGroup().addTo(map);
   RULER.line = L.polyline([], {
+    pane: RULER_PANE,
     color: "#16202a",
     weight: 3,
     opacity: 0.85,

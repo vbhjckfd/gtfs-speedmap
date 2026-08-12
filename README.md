@@ -206,18 +206,35 @@ Nothing in this pass reads the timetable, which makes the timetable a free check
 Median observed leg 111 s against 120 s scheduled — buses beat the timetable slightly more often
 than they miss it, and the spread either side is the thing the map exists to show.
 
-Clicking two points then lists every route with a stop within 500 m of both, **in path order** —
-the same two points are a different journey on the other side of the street — fastest first, each
-with the stops it boards and alights at and how many rides the figure rests on. A leg nobody was
-seen running in that selection is filled with the route's own average leg and the row says how many
-of them were. Picking a route draws the stretch being timed.
+### From two points, not two stops
+
+The legs are measured stop to stop; the question is never asked that way. Both ends of the ruler
+are projected onto each route's **shape** — the street the bus actually drives, from the schedule's
+`shapes.txt` — and a route qualifies when it passes within `RIDE_NEAR_M` of both, in the order it
+drives them. The stops are then just the marks along that line: a stretch that covers three and a
+half legs is charged three and a half legs, the part-leg in proportion to how much of it the
+stretch covers. That assumes an even pace across one leg, which is a 460 m block at the median.
+
+Three things that had to be got right, each of which was wrong first:
+
+| Trap | What it did | Fix |
+|---|---|---|
+| A route that doubles back | Placed the two ends on different passes, so 1.15 km of street came out as 2.6 km at 32 km/h | Take every local minimum of the distance to the line, then the pass-pair that gives the shortest way round |
+| Stops matched to the shape one at a time | Put a stop on whichever pass was nearer; forcing each after the last threw А58's stops onto its return leg, a 23 km jump between neighbours | Match the whole sequence at once (Viterbi), with slack for the few-metre inversions of a tight turn |
+| A generous radius | At 250 m a route on the next street qualified and then reported its own longer way round | 150 m to the line, plus a cap on how far round the houses a route may go against the straight line |
+
+Seven of the 110 route-directions have stops their shape cannot account for; those fall back to the
+chain of their own stops, which is the same idea at lower resolution.
+
+Routes are listed fastest first, each with the stops it boards and alights at and how many rides the
+figure rests on. A leg nobody was seen running in that selection is filled with the route's own
+average leg and the row says how many of them were. Picking a route draws the stretch being timed.
 
 Three things it does not claim. It does not know when the next bus leaves, so waiting time is
 absent and a route running every 40 minutes reads the same as one every 6. Summing per-leg medians
 is not the median of the total — the average is additive and exact, the median is a good estimate
-that assumes a bad leg does not predict the next one. And the highlighted route is drawn stop to
-stop rather than along the street, because the leg times need the schedule's stop order but not
-its shape geometry.
+that assumes a bad leg does not predict the next one. And a part-leg is priced by distance, so a stretch
+that stops short of a stop is charged an even share of that leg rather than the queue at its end.
 
 ## Keeping it current
 
