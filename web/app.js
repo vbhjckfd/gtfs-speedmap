@@ -14,10 +14,6 @@ let index = null;
 let current = null; // { lat, lon, v, n } for the visible selection
 let requestSeq = 0;
 
-// Statistics the ruler can turn into a ride time. `spread` is also in km/h but
-// is a difference between two speeds, not a speed, so it is not on the list.
-const SPEED_METRICS = ["v", "med", "p15", "p85"];
-
 const els = {
   month: document.getElementById("month"),
   daytype: document.getElementById("daytype"),
@@ -34,7 +30,6 @@ const els = {
   ruler: document.getElementById("ruler"),
   rides: document.getElementById("rides"),
   rulerMetric: document.getElementById("ruler-metric"),
-  rulerFigures: document.getElementById("ruler-figures"),
   rulerClear: document.getElementById("ruler-clear"),
   rulerButton: null, // the map control, created below
 };
@@ -524,23 +519,8 @@ map.on("click", (e) => {
 
 /* ---------- ruler ---------- */
 
-// Ride time along a drawn line is the sum of (step ÷ the speed of the cell that
-// step falls in), so a line through a red corridor costs what that corridor
-// actually costs rather than what the city average would suggest. Steps with no
-// cell within a snap radius of them — a stretch no bus runs on, or one thinned
-// out by the stop filter — are filled with the median of the steps that did
-// match, and the share that matched is reported alongside the time.
-//
-// Positions are sampled every ~10 s, so a cell's samples are already weighted by
-// the time buses spend in it, which makes the arithmetic mean the space-mean
-// speed and `distance ÷ mean` the right travel time. The other statistics have
-// no such guarantee: where the median bus is standing at a light the cell reads
-// 0.5 km/h, and 12 m at 0.5 km/h is 90 s, so a handful of cells would otherwise
-// swallow a whole trip — 2.75 km of Lychakivska timed 37 min on the median
-// against 12 on the average. Speeds are floored to keep one standing cell from
-// running the clock. 3 km/h is low enough to leave the average alone (it moved
-// that same line by 2%) and high enough to make the median sane (14 min).
-const RULER_FLOOR_KMH = 3;
+// Two ends, and the buses that run between them. The line drawn on the map is
+// a sight-line, not a route: what is measured is what the vehicles did.
 const RULER = {
   on: false,
   points: [],
@@ -549,69 +529,12 @@ const RULER = {
   layer: null,
 };
 
-function rulerSnap() {
-  return index.cell_size_m * 1.6;
-}
-
-function rulerMetric() {
-  return index.metrics.find((m) => m.key === els.rulerMetric.value) || activeMetric();
-}
-
-function measurePath(points, key) {
-  const values = current ? current[key] || current.v : null;
-  if (!values || points.length < 2) return null;
-
-  const step = index.cell_size_m / 2;
-  const snap = rulerSnap();
-  const samples = [];
-  let distance = 0;
-
-  for (let s = 1; s < points.length; s++) {
-    const from = points[s - 1];
-    const to = points[s];
-    const length = from.distanceTo(to);
-    distance += length;
-    // Sample at the midpoint of each step, so a step is represented by the
-    // cell it actually sits on rather than by the one at its edge.
-    const steps = Math.max(1, Math.round(length / step));
-    const piece = length / steps;
-    for (let i = 0; i < steps; i++) {
-      const f = (i + 0.5) / steps;
-      const at = L.latLng(
-        from.lat + (to.lat - from.lat) * f,
-        from.lng + (to.lng - from.lng) * f,
-      );
-      const hit = nearestIndex(current, at, snap);
-      const value = hit.index >= 0 && hit.distance <= snap ? values[hit.index] : null;
-      samples.push({ length: piece, kmh: value == null ? null : value });
-    }
-  }
-
-  const known = samples.filter((s) => s.kmh != null).map((s) => s.kmh);
-  if (!known.length) return { distance, seconds: null, covered: 0 };
-  known.sort((a, b) => a - b);
-  const fallback = known[Math.floor(known.length / 2)];
-
-  let seconds = 0;
-  let matched = 0;
-  for (const sample of samples) {
-    if (sample.kmh != null) matched += sample.length;
-    const kmh = Math.max(RULER_FLOOR_KMH, sample.kmh ?? fallback);
-    seconds += sample.length / ((kmh * 1000) / 3600);
-  }
-  return { distance, seconds, covered: distance ? matched / distance : 0 };
-}
-
 function formatDuration(seconds) {
   const total = Math.round(seconds);
   if (total < 60) return `${total} s`;
   const minutes = Math.floor(total / 60);
   if (minutes < 60) return `${minutes} min ${String(total % 60).padStart(2, "0")} s`;
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
-}
-
-function formatDistance(metres) {
-  return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(2)} km`;
 }
 
 /* ---------- real rides ---------- */
@@ -632,11 +555,11 @@ function ridesKey() {
   return `rides-${els.month.value}-${els.daytype.value}-${hourKey()}`;
 }
 
-// The ride figures follow the ruler's own dropdown: the average of observed
-// leg times, or their median. The two percentile options have no counterpart
-// in a measured journey, so they fall through to the median and say so.
+// Median or average of the observed leg times, whichever the dropdown says.
+// The median is the default: journey times are right-skewed, so one bus that
+// broke down moves the average and leaves the median alone.
 function rideMetric() {
-  return els.rulerMetric.value === "v" ? "avg" : "med";
+  return els.rulerMetric.value === "avg" ? "avg" : "med";
 }
 
 function metresBetween(lat1, lon1, lat2, lon2) {
@@ -750,8 +673,13 @@ function rideRow(option, i) {
 }
 
 function ridesReadout() {
-  if (!index.rides) return "";
-  if (RULER.points.length < 2) return "";
+  if (!index.rides) {
+    return `<div class="ride-empty">This build carries no measured ride times.</div>`;
+  }
+  if (RULER.points.length === 0) return `<div class="ride-empty">Click the map to set where you are.</div>`;
+  if (RULER.points.length === 1) {
+    return `<div class="ride-empty">Click again for where you are going. Drag either end to move it.</div>`;
+  }
   // Stale figures from the previous hour are worse than none while the new
   // ones are on their way.
   if (!RIDES.paths || !RIDES.data || RIDES.key !== ridesKey()) {
@@ -768,12 +696,8 @@ function ridesReadout() {
   const shown = options.slice(0, RIDE_ROWS).map(rideRow).join("");
   const rest = options.length - RIDE_ROWS;
   const source = rideMetric() === "avg" ? "average" : "median";
-  const note =
-    els.rulerMetric.value === "v" || els.rulerMetric.value === "med"
-      ? `${source} of observed rides`
-      : `${source} of observed rides — no percentile is measured here`;
   return (
-    `<div class="ride-head">On the bus <span>${note}</span></div>` +
+    `<div class="ride-head">On the bus <span>${source} of observed rides</span></div>` +
     shown +
     (rest > 0 ? `<div class="ride-more">${rest} slower route${rest === 1 ? "" : "s"}</div>` : "")
   );
@@ -799,39 +723,8 @@ async function loadRides() {
   }
 }
 
-function rulerReadout() {
-  if (RULER.points.length === 0) {
-    return "Click the map to drop the first end.";
-  }
-  if (RULER.points.length === 1) {
-    return "Click again to drop the other end. Drag a point to move it.";
-  }
-  const metric = rulerMetric();
-  const result = measurePath(RULER.points, metric.key);
-  if (!result) return "No data loaded for this selection.";
-  if (result.seconds == null) {
-    return (
-      `<b>${formatDistance(result.distance)}</b>` +
-      `<div class="ruler-sub">No bus data along this line — nothing to time it with.</div>`
-    );
-  }
-  const kmh = result.distance / 1000 / (result.seconds / 3600);
-  const covered = Math.round(result.covered * 100);
-  return (
-    `<b>${formatDuration(result.seconds)}</b>` +
-    `<div class="ruler-sub">${formatDistance(result.distance)} · ` +
-    `${kmh.toFixed(1)} km/h door to door</div>` +
-    // Below about half, the figure is mostly the fallback talking, which the
-    // reader should see before they quote it.
-    `<div class="ruler-sub${covered < 50 ? " ruler-warn" : ""}">` +
-    `${metric.label.toLowerCase()} speed · ${covered}% of the line ` +
-    `has data${covered < 100 ? ", rest at the line's median" : ""}</div>`
-  );
-}
-
 function rulerRedraw() {
   if (RULER.line) RULER.line.setLatLngs(RULER.points);
-  els.rulerFigures.innerHTML = rulerReadout();
   // Re-rendering the list drops the active row, so the stretch it drew goes
   // with it rather than hanging over a line that has since moved.
   highlightRide(null);
@@ -851,6 +744,10 @@ function rulerRedraw() {
 }
 
 function rulerAddPoint(latlng) {
+  // A journey has two ends. A third click is the start of the next one rather
+  // than a waypoint on this one — nothing in between is measured anyway, since
+  // the routes are timed stop to stop along their own paths.
+  if (RULER.points.length >= 2) rulerClear();
   const at = RULER.points.length;
   RULER.points.push(latlng);
 
@@ -937,16 +834,13 @@ function rulerBoot() {
   }).addTo(RULER.layer);
   new RulerControl({ position: "topright" }).addTo(map);
 
-  for (const key of SPEED_METRICS) {
-    const metric = index.metrics.find((m) => m.key === key);
-    if (!metric) continue;
+  for (const metric of (index.rides && index.rides.metrics) || []) {
     const option = document.createElement("option");
     option.value = metric.key;
     option.textContent = metric.label;
     els.rulerMetric.append(option);
   }
-  // Open on whatever the map is already coloured by, when that is a speed.
-  els.rulerMetric.value = SPEED_METRICS.includes(els.metric.value) ? els.metric.value : "v";
+  els.rulerMetric.value = "med";
 
   els.rulerMetric.addEventListener("change", rulerRedraw);
   els.rulerClear.addEventListener("click", rulerClear);

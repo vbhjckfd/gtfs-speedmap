@@ -185,31 +185,11 @@ input[type="range"] {
   color: var(--text);
 }
 
-.ruler-figures {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.ruler-figures b {
-  font-size: 19px;
-  color: var(--text);
-}
-
-.ruler-sub {
-  margin-top: 2px;
-}
-
-.ruler-warn {
-  color: #b0512a;
-}
-
 /* ---------- routes that actually run it ---------- */
 
 .rides:not(:empty) {
-  margin-top: 9px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  max-height: 42vh;
+  margin-top: 6px;
+  max-height: 46vh;
   overflow-y: auto;
 }
 

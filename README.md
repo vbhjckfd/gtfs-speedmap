@@ -1,7 +1,8 @@
 # gtfs-speedmap
 
 An OSM map of **bus running speed** in Lviv, one dot per 25 m cell, coloured green (fast) to red
-(slow), with an hour-of-day slider, a month picker and a weekday/weekend split.
+(slow), with an hour-of-day slider, a month picker and a weekday/weekend split — and a ruler that
+answers the other question, **how long the ride takes**, from the buses' own stop-to-stop times.
 
 Built from the GTFS-RT vehicle-position snapshots that
 [`gtfs-collector`](../gtfs-collector) archives to Cloudflare R2.
@@ -9,14 +10,17 @@ Built from the GTFS-RT vehicle-position snapshots that
 ```
 R2  raw/YYYY-MM-DD/*.pb           GTFS-RT snapshots, every ~10 s
 R2  static/YYYY-MM-DD/static.zip  GTFS schedule as archived that day
-        │  python -m speedmap.aggregate --all
-        ▼
-data/agg/YYYY-MM-DD.parquet       per-day sums, keyed (month, hour, cell)
-data/hist/YYYY-MM-DD.parquet      per-day speed histograms, same key + bin
+        │  python -m speedmap.aggregate --all   │  python -m speedmap.segments --all
+        ▼                                       ▼
+data/agg/YYYY-MM-DD.parquet                 data/seg/YYYY-MM-DD.parquet
+  per-day sums, keyed (month, hour, cell)     stop-to-stop times, keyed (…, route, stop pair)
+data/hist/YYYY-MM-DD.parquet                data/seghist/YYYY-MM-DD.parquet
+  per-day speed histograms, same key + bin    leg-time histograms, same key + bin
         │  python -m speedmap.sync push     ⇄  R2 derived/{agg,hist}/
         │  python -m speedmap.build_web
         ▼
-web/data/{month}-{days}-{hour}.json   what the map fetches
+web/data/{month}-{days}-{hour}.json         what the map fetches
+web/data/rides-{month}-{days}-{hour}.json   what the ruler fetches
         │  make deploy
         ▼
 Cloudflare Worker (assets-only)
@@ -148,47 +152,21 @@ Sample counts per cell: a single month at a single hour has a median of 5 sample
 cells at 15 or more, so the percentiles are firmest on the all-months views and on busy corridors —
 the popup shows the sample count behind every cell, alongside its speed hour by hour.
 
-## Measuring a ride
+## How long the ride takes
 
-The ruler button beside the zoom controls turns clicks into a line and prices it. Every 12 m of
-that line is matched to the cell it falls in and costs `12 m ÷ that cell's speed`, so a line
-through a red corridor is charged what the corridor charges rather than what the city average
-would suggest. The dropdown in the ruler box picks which speed pays: average, median, or either
-end of the distribution.
+The map above answers "how fast is this street". It cannot answer "how long will this take me":
+positions within 40 m of a stop on the vehicle's own trip are dropped, so every dwell is a hole in
+it, and a speed field integrated along a line is not a journey anyway.
 
-Two things about that sum are worth stating plainly.
-
-**The average is the estimator with a guarantee behind it; the others are readings.** Positions are
-sampled every ~10 s, so a cell's samples are already weighted by the time buses spend in it. Total
-distance over total time is then exactly the arithmetic mean, which makes `distance ÷ average` the
-travel time and not an approximation of one. The median carries no such property: where the typical
-bus stands at a light the cell reads 0.5 km/h, and 12 m at 0.5 km/h is 90 seconds, so a handful of
-cells would otherwise swallow a whole trip — 2.75 km of Личаківська timed **37 minutes** on the
-median against 12 on the average. Speeds are floored at `3 km/h` to stop that. The floor is low
-enough to leave the average alone — it moved that same line by 2% — and high enough to bring the
-median back to 14 minutes, just above the average, which is where a typical-instant reading belongs.
-
-**Coverage is reported because it is often poor.** The line is straight between the points clicked,
-so it cuts corners the street does not, and it crosses parks and rail land that no bus route
-touches. Steps with no cell within 40 m of them are filled with the median of the steps that did
-match, and the share that genuinely matched is printed under the time — in orange below half, where
-the figure is mostly the fallback talking. Clicking a few more points along the actual road is the
-fix.
-
-The time is the bus moving. Waiting for it is not in the archive, and neither is the walk to the
-stop, so this is the ride and nothing else.
-
-## What the buses actually did
-
-Everything above prices a *shape*. Underneath it, the ruler answers the question that was really
-being asked — of the buses that run past both ends, how long did they take between them — from a
-second pass over the same archive that never looks at the speed field at all.
+So the ruler button beside the zoom controls does not measure the line you draw. Drop a point where
+you are and another where you are going, and it lists every route that runs between them, timed on
+what its vehicles actually did — from a second pass over the same archive that never looks at the
+speed field at all.
 
 [`segments.py`](src/speedmap/segments.py) reassembles each vehicle's day into runs, finds the
 moment each run came nearest to every stop on its route's path, and keeps the elapsed time between
 adjacent stops. That number includes everything a rider sits through: the dwell at the stop, the
-queue at the light, the wait to pull out. The speed map excludes all of it by construction, which
-is why the two figures differ and why both are worth having.
+queue at the light, the wait to pull out.
 
 ```
 R2  raw/YYYY-MM-DD/*.pb
@@ -217,6 +195,16 @@ the time between arriving at the first stop and arriving at the last.
 
 About 1% of candidate legs are rejected, and 96% of the 3,107 adjacent stop pairs in the network
 have enough observations to publish.
+
+Nothing in this pass reads the timetable, which makes the timetable a free check on it. Against the
+`stop_times.txt` of the schedule the vehicles were running, over the 3,038 pairs both have:
+
+| observed ÷ scheduled | p10 | median | p90 |
+|---|---|---|---|
+| | 0.53 | **0.94** | 1.76 |
+
+Median observed leg 111 s against 120 s scheduled — buses beat the timetable slightly more often
+than they miss it, and the spread either side is the thing the map exists to show.
 
 Clicking two points then lists every route with a stop within 500 m of both, **in path order** —
 the same two points are a different journey on the other side of the street — ranked by the whole

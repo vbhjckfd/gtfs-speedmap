@@ -154,17 +154,15 @@
         <span>Ride time</span>
         <button type="button" id="ruler-clear">Clear</button>
       </div>
-      <div class="ruler-figures" id="ruler-figures"></div>
       <div class="rides" id="rides"></div>
       <label class="field ruler-field">
         <span>Statistic</span>
         <select id="ruler-metric"></select>
       </label>
       <p class="note">
-        The headline figure prices the line you drew against the speed map, cell by cell — no
-        dwell at stops, no waiting for the bus, no detour onto the real street grid. The routes
-        below are the other thing: real vehicles timed between the stops nearest your two ends,
-        standing time and all. Drag a point to move it, Backspace to undo, Esc to clear.
+        Real vehicles, timed between the stops nearest your two ends: standing at stops and
+        waiting at lights included, waiting for the bus to turn up not. Drag either end to move
+        it, Esc to clear.
       </p>
     </div>
 
@@ -192,15 +190,14 @@
       </p>
       <h2>Ride time between two points</h2>
       <p>
-        The ruler measures a journey rather than a distance. Drop a point at each end and it
-        gives two figures: the line you drew priced against the speed map cell by cell, and —
-        underneath — every bus route with a stop near both ends, timed on what its vehicles
-        actually did. Those route times come from a separate pass over the same archive that
-        follows individual buses between consecutive stops, so they include the dwell at each
-        stop and the wait at each light, which the speed map excludes by design. Routes are
-        ranked by the whole door-to-door journey including the walk to the stop, and picking one
-        draws the stretch of it being timed. Waiting for the bus to turn up is not measured:
-        the archive records where buses were, not when the next one leaves.
+        Drop a point where you are and another where you are going, and the map lists every bus
+        route with a stop near both — in that order — timed on what its vehicles actually did.
+        Those times come from a separate pass over the same archive that follows individual
+        buses between consecutive stops, so they include the dwell at each stop and the wait at
+        each light, which the speed map above excludes by design. Routes are ranked by the whole
+        door-to-door journey including the walk to the stop, and picking one draws the stretch
+        of it being timed. Waiting for the bus to turn up is not measured: the archive records
+        where buses were, not when the next one leaves.
       </p>
       <h2>How the figures are produced</h2>
       <p>
