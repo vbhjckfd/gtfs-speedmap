@@ -575,14 +575,6 @@ function metresBetween(lat1, lon1, lat2, lon2) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-// Walking speed, for ranking routes by the whole journey. 5 km/h is the usual
-// planning figure and is close enough for a few hundred metres.
-const WALK_KMH = 5;
-
-function walkSeconds(metres) {
-  return metres / ((WALK_KMH * 1000) / 3600);
-}
-
 /** Where along a route's path a clicked point boards, or -1 if it does not. */
 function boardingStop(path, latlng) {
   const stops = RIDES.paths.stops;
@@ -632,14 +624,14 @@ function rideOptions(a, b) {
       stops: to.index - from.index,
       holes: slice.length - known.length,
       observations: Math.min(...legs.n.slice(from.index, to.index)),
-      walk: from.distance + to.distance,
       from: from.index,
       to: to.index,
     });
   }
-  // Ordered by the whole journey, not the bus part of it: a route two minutes
-  // quicker that leaves you 600 m further from the door is not quicker.
-  return out.sort((x, y) => x.seconds + walkSeconds(x.walk) - (y.seconds + walkSeconds(y.walk)));
+  // Ordered by the figure on screen. Every route here boards within
+  // RIDE_NEAR_M of the same point, so the walk is comparable between them and
+  // ranking by it as well would only reorder rows against their own numbers.
+  return out.sort((x, y) => x.seconds - y.seconds);
 }
 
 function highlightRide(option) {
@@ -666,15 +658,14 @@ function rideRow(option, i) {
   const stops = RIDES.paths.stops;
   const board = stops[option.route.path[option.from]];
   const alight = stops[option.route.path[option.to]];
-  const walk = Math.round(option.walk);
   return (
     `<button type="button" class="ride-row" data-ride="${i}">` +
     `<span class="ride-name">${option.route.name}</span>` +
     `<span class="ride-time">${formatDuration(option.seconds)}</span>` +
     `<span class="ride-detail">${board ? board[2] : "?"} → ${alight ? alight[2] : "?"}<br>` +
-    `${option.stops} stop${option.stops === 1 ? "" : "s"} · ${walk} m walk ` +
-    `(${formatDuration(walkSeconds(option.walk))}) · ${option.observations} rides seen` +
-    `${option.holes ? ` · ${option.holes} leg(s) unobserved` : ""}</span>` +
+    `${option.stops} stop${option.stops === 1 ? "" : "s"} · ${option.observations} rides seen` +
+    // Only when part of the total is filled in rather than measured.
+    `${option.holes ? ` · ${option.holes} of ${option.stops} legs estimated` : ""}</span>` +
     `</button>`
   );
 }

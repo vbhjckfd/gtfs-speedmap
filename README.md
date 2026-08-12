@@ -207,9 +207,10 @@ Median observed leg 111 s against 120 s scheduled — buses beat the timetable s
 than they miss it, and the spread either side is the thing the map exists to show.
 
 Clicking two points then lists every route with a stop within 500 m of both, **in path order** —
-the same two points are a different journey on the other side of the street — ranked by the whole
-door-to-door journey rather than the bus part of it, since a route two minutes quicker that leaves
-you 600 m further from the door is not quicker. Picking one draws the stretch being timed.
+the same two points are a different journey on the other side of the street — fastest first, each
+with the stops it boards and alights at and how many rides the figure rests on. A leg nobody was
+seen running in that selection is filled with the route's own average leg and the row says how many
+of them were. Picking a route draws the stretch being timed.
 
 Three things it does not claim. It does not know when the next bus leaves, so waiting time is
 absent and a route running every 40 minutes reads the same as one every 6. Summing per-leg medians
