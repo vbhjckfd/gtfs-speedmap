@@ -148,6 +148,36 @@ Sample counts per cell: a single month at a single hour has a median of 5 sample
 cells at 15 or more, so the percentiles are firmest on the all-months views and on busy corridors —
 the popup shows the sample count behind every cell, alongside its speed hour by hour.
 
+## Measuring a ride
+
+The ruler button beside the zoom controls turns clicks into a line and prices it. Every 12 m of
+that line is matched to the cell it falls in and costs `12 m ÷ that cell's speed`, so a line
+through a red corridor is charged what the corridor charges rather than what the city average
+would suggest. The dropdown in the ruler box picks which speed pays: average, median, or either
+end of the distribution.
+
+Two things about that sum are worth stating plainly.
+
+**The average is the estimator with a guarantee behind it; the others are readings.** Positions are
+sampled every ~10 s, so a cell's samples are already weighted by the time buses spend in it. Total
+distance over total time is then exactly the arithmetic mean, which makes `distance ÷ average` the
+travel time and not an approximation of one. The median carries no such property: where the typical
+bus stands at a light the cell reads 0.5 km/h, and 12 m at 0.5 km/h is 90 seconds, so a handful of
+cells would otherwise swallow a whole trip — 2.75 km of Личаківська timed **37 minutes** on the
+median against 12 on the average. Speeds are floored at `3 km/h` to stop that. The floor is low
+enough to leave the average alone — it moved that same line by 2% — and high enough to bring the
+median back to 14 minutes, just above the average, which is where a typical-instant reading belongs.
+
+**Coverage is reported because it is often poor.** The line is straight between the points clicked,
+so it cuts corners the street does not, and it crosses parks and rail land that no bus route
+touches. Steps with no cell within 40 m of them are filled with the median of the steps that did
+match, and the share that genuinely matched is printed under the time — in orange below half, where
+the figure is mostly the fallback talking. Clicking a few more points along the actual road is the
+fix.
+
+The time is the bus moving. Waiting for it is not in the archive, and neither is the walk to the
+stop, so this is the ride and nothing else.
+
 ## Keeping it current
 
 Updating is manual, roughly monthly:

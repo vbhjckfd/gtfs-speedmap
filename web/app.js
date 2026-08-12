@@ -14,6 +14,10 @@ let index = null;
 let current = null; // { lat, lon, v, n } for the visible selection
 let requestSeq = 0;
 
+// Statistics the ruler can turn into a ride time. `spread` is also in km/h but
+// is a difference between two speeds, not a speed, so it is not on the list.
+const SPEED_METRICS = ["v", "med", "p15", "p85"];
+
 const els = {
   month: document.getElementById("month"),
   daytype: document.getElementById("daytype"),
@@ -27,6 +31,11 @@ const els = {
   scaleLow: document.getElementById("scale-low"),
   scaleHigh: document.getElementById("scale-high"),
   scaleUnit: document.getElementById("scale-unit"),
+  ruler: document.getElementById("ruler"),
+  rulerMetric: document.getElementById("ruler-metric"),
+  rulerFigures: document.getElementById("ruler-figures"),
+  rulerClear: document.getElementById("ruler-clear"),
+  rulerButton: null, // the map control, created below
 };
 
 /* ---------- colour ---------- */
@@ -338,6 +347,9 @@ async function render() {
     dots.redraw();
     els.subtitle.textContent = `no data for this selection (${err.message})`;
   }
+  // A new hour is a new set of speeds, so a line already on the map is timed
+  // again against them.
+  if (RULER.on) rulerRedraw();
   prefetchNeighbours();
 }
 
@@ -353,18 +365,65 @@ function syncHourLabel() {
 
 const METRES_PER_DEG_LAT = 111320;
 
-/** Index of the point in a {lat, lon} pair of arrays nearest to `latlng`. */
-function nearestIndex(source, latlng) {
+// A popup click can afford to scan all ~40k cells; the ruler cannot, since it
+// looks up a cell every 12 m along the line. Cells are bucketed once per
+// payload and the lookup walks outwards a ring of buckets at a time.
+const BUCKET_M = 100;
+const GRIDS = new WeakMap();
+
+function gridOf(source) {
+  const cached = GRIDS.get(source);
+  if (cached) return cached;
+  const latStep = BUCKET_M / METRES_PER_DEG_LAT;
+  const lonStep = latStep / Math.cos((LVIV[0] * Math.PI) / 180);
+  const buckets = new Map();
+  for (let i = 0; i < source.lat.length; i++) {
+    const key = `${Math.floor(source.lat[i] / latStep)},${Math.floor(source.lon[i] / lonStep)}`;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(i);
+    else buckets.set(key, [i]);
+  }
+  const grid = { latStep, lonStep, buckets };
+  GRIDS.set(source, grid);
+  return grid;
+}
+
+/**
+ * Index of the point in a {lat, lon} pair of arrays nearest to `latlng`.
+ * `maxDistance` bounds how far out to search; without it the search runs until
+ * it finds something, which on an empty selection means the whole grid. It
+ * bounds the search, not the answer — a hit slightly beyond it can still come
+ * back, so callers decide what counts as near enough by checking `distance`.
+ * Index is -1 and distance Infinity when the search found nothing at all.
+ */
+function nearestIndex(source, latlng, maxDistance) {
+  const grid = gridOf(source);
   const cosLat = Math.cos((latlng.lat * Math.PI) / 180);
+  const gy = Math.floor(latlng.lat / grid.latStep);
+  const gx = Math.floor(latlng.lng / grid.lonStep);
+  const rings = Number.isFinite(maxDistance) ? Math.ceil(maxDistance / BUCKET_M) + 1 : 64;
   let best = -1;
   let bestDist = Infinity;
-  for (let i = 0; i < source.lat.length; i++) {
-    const dy = (source.lat[i] - latlng.lat) * METRES_PER_DEG_LAT;
-    const dx = (source.lon[i] - latlng.lng) * METRES_PER_DEG_LAT * cosLat;
-    const d = dx * dx + dy * dy;
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
+
+  for (let ring = 0; ring <= rings; ring++) {
+    // Nothing in this ring can be nearer than (ring − 1) buckets, so a hit
+    // already inside that radius cannot be beaten by going further out.
+    if (best >= 0 && Math.sqrt(bestDist) <= (ring - 1) * BUCKET_M) break;
+    for (let dy = -ring; dy <= ring; dy++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue; // interior already done
+        const bucket = grid.buckets.get(`${gy + dy},${gx + dx}`);
+        if (!bucket) continue;
+        for (const i of bucket) {
+          const my = (source.lat[i] - latlng.lat) * METRES_PER_DEG_LAT;
+          const mx = (source.lon[i] - latlng.lng) * METRES_PER_DEG_LAT * cosLat;
+          const d = mx * mx + my * my;
+          if (d < bestDist) {
+            bestDist = d;
+            best = i;
+          }
+        }
+      }
     }
   }
   return { index: best, distance: Math.sqrt(bestDist) };
@@ -406,7 +465,7 @@ function sparkline(values, hours, selected) {
 async function cellProfile(latlng) {
   const profile = await fetchSelection(profileKey());
   if (!profile.lat.length) return "";
-  const hit = nearestIndex(profile, latlng);
+  const hit = nearestIndex(profile, latlng, index.cell_size_m);
   if (hit.index < 0 || hit.distance > index.cell_size_m) return "";
   const width = profile.hours.length;
   const values = profile.q.slice(hit.index * width, (hit.index + 1) * width);
@@ -431,11 +490,15 @@ function popupContent(i, spark) {
 }
 
 map.on("click", (e) => {
+  if (RULER.on) {
+    rulerAddPoint(e.latlng);
+    return;
+  }
   if (!current) return;
   // A fixed metre tolerance is unclickable when zoomed in and grabs the wrong
   // cell when zoomed out, so allow a constant ~12 px of slop instead.
   const tolerance = Math.max(index.cell_size_m, metresPerPixel() * 12);
-  const hit = nearestIndex(current, e.latlng);
+  const hit = nearestIndex(current, e.latlng, tolerance);
   if (hit.index < 0 || hit.distance > tolerance) return;
 
   const at = L.latLng(current.lat[hit.index], current.lon[hit.index]);
@@ -457,6 +520,245 @@ map.on("click", (e) => {
     })
     .catch(() => {});
 });
+
+/* ---------- ruler ---------- */
+
+// Ride time along a drawn line is the sum of (step ÷ the speed of the cell that
+// step falls in), so a line through a red corridor costs what that corridor
+// actually costs rather than what the city average would suggest. Steps with no
+// cell within a snap radius of them — a stretch no bus runs on, or one thinned
+// out by the stop filter — are filled with the median of the steps that did
+// match, and the share that matched is reported alongside the time.
+//
+// Positions are sampled every ~10 s, so a cell's samples are already weighted by
+// the time buses spend in it, which makes the arithmetic mean the space-mean
+// speed and `distance ÷ mean` the right travel time. The other statistics have
+// no such guarantee: where the median bus is standing at a light the cell reads
+// 0.5 km/h, and 12 m at 0.5 km/h is 90 s, so a handful of cells would otherwise
+// swallow a whole trip — 2.75 km of Lychakivska timed 37 min on the median
+// against 12 on the average. Speeds are floored to keep one standing cell from
+// running the clock. 3 km/h is low enough to leave the average alone (it moved
+// that same line by 2%) and high enough to make the median sane (14 min).
+const RULER_FLOOR_KMH = 3;
+const RULER = {
+  on: false,
+  points: [],
+  vertices: [],
+  line: null,
+  layer: null,
+};
+
+function rulerSnap() {
+  return index.cell_size_m * 1.6;
+}
+
+function rulerMetric() {
+  return index.metrics.find((m) => m.key === els.rulerMetric.value) || activeMetric();
+}
+
+function measurePath(points, key) {
+  const values = current ? current[key] || current.v : null;
+  if (!values || points.length < 2) return null;
+
+  const step = index.cell_size_m / 2;
+  const snap = rulerSnap();
+  const samples = [];
+  let distance = 0;
+
+  for (let s = 1; s < points.length; s++) {
+    const from = points[s - 1];
+    const to = points[s];
+    const length = from.distanceTo(to);
+    distance += length;
+    // Sample at the midpoint of each step, so a step is represented by the
+    // cell it actually sits on rather than by the one at its edge.
+    const steps = Math.max(1, Math.round(length / step));
+    const piece = length / steps;
+    for (let i = 0; i < steps; i++) {
+      const f = (i + 0.5) / steps;
+      const at = L.latLng(
+        from.lat + (to.lat - from.lat) * f,
+        from.lng + (to.lng - from.lng) * f,
+      );
+      const hit = nearestIndex(current, at, snap);
+      const value = hit.index >= 0 && hit.distance <= snap ? values[hit.index] : null;
+      samples.push({ length: piece, kmh: value == null ? null : value });
+    }
+  }
+
+  const known = samples.filter((s) => s.kmh != null).map((s) => s.kmh);
+  if (!known.length) return { distance, seconds: null, covered: 0 };
+  known.sort((a, b) => a - b);
+  const fallback = known[Math.floor(known.length / 2)];
+
+  let seconds = 0;
+  let matched = 0;
+  for (const sample of samples) {
+    if (sample.kmh != null) matched += sample.length;
+    const kmh = Math.max(RULER_FLOOR_KMH, sample.kmh ?? fallback);
+    seconds += sample.length / ((kmh * 1000) / 3600);
+  }
+  return { distance, seconds, covered: distance ? matched / distance : 0 };
+}
+
+function formatDuration(seconds) {
+  const total = Math.round(seconds);
+  if (total < 60) return `${total} s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} min ${String(total % 60).padStart(2, "0")} s`;
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
+}
+
+function formatDistance(metres) {
+  return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(2)} km`;
+}
+
+function rulerReadout() {
+  if (RULER.points.length === 0) {
+    return "Click the map to drop the first end.";
+  }
+  if (RULER.points.length === 1) {
+    return "Click again to drop the other end. Drag a point to move it.";
+  }
+  const metric = rulerMetric();
+  const result = measurePath(RULER.points, metric.key);
+  if (!result) return "No data loaded for this selection.";
+  if (result.seconds == null) {
+    return (
+      `<b>${formatDistance(result.distance)}</b>` +
+      `<div class="ruler-sub">No bus data along this line — nothing to time it with.</div>`
+    );
+  }
+  const kmh = result.distance / 1000 / (result.seconds / 3600);
+  const covered = Math.round(result.covered * 100);
+  return (
+    `<b>${formatDuration(result.seconds)}</b>` +
+    `<div class="ruler-sub">${formatDistance(result.distance)} · ` +
+    `${kmh.toFixed(1)} km/h door to door</div>` +
+    // Below about half, the figure is mostly the fallback talking, which the
+    // reader should see before they quote it.
+    `<div class="ruler-sub${covered < 50 ? " ruler-warn" : ""}">` +
+    `${metric.label.toLowerCase()} speed · ${covered}% of the line ` +
+    `has data${covered < 100 ? ", rest at the line's median" : ""}</div>`
+  );
+}
+
+function rulerRedraw() {
+  if (RULER.line) RULER.line.setLatLngs(RULER.points);
+  els.rulerFigures.innerHTML = rulerReadout();
+}
+
+function rulerAddPoint(latlng) {
+  const at = RULER.points.length;
+  RULER.points.push(latlng);
+
+  const marker = L.marker(latlng, {
+    draggable: true,
+    keyboard: false,
+    icon: L.divIcon({ className: "ruler-vertex", iconSize: [11, 11] }),
+  }).addTo(RULER.layer);
+  // Grabbing a point must move it, not drop a new one underneath it.
+  marker.on("click", (e) => L.DomEvent.stop(e));
+  marker.on("drag", () => {
+    RULER.points[at] = marker.getLatLng();
+    rulerRedraw();
+  });
+  RULER.vertices.push(marker);
+  rulerRedraw();
+}
+
+function rulerUndo() {
+  const marker = RULER.vertices.pop();
+  if (!marker) return;
+  RULER.layer.removeLayer(marker);
+  RULER.points.pop();
+  rulerRedraw();
+}
+
+function rulerClear() {
+  RULER.vertices.forEach((marker) => RULER.layer.removeLayer(marker));
+  RULER.vertices = [];
+  RULER.points = [];
+  rulerRedraw();
+}
+
+function rulerToggle(on) {
+  RULER.on = on;
+  els.ruler.hidden = !on;
+  document.body.classList.toggle("ruler-on", on);
+  els.rulerButton.classList.toggle("active", on);
+  els.rulerButton.setAttribute("aria-pressed", String(on));
+  // A double click is how a line gets finished elsewhere; here it must not zoom.
+  if (on) {
+    map.doubleClickZoom.disable();
+    map.closePopup();
+  } else {
+    map.doubleClickZoom.enable();
+    rulerClear();
+  }
+}
+
+const RulerControl = L.Control.extend({
+  onAdd() {
+    const container = L.DomUtil.create("div", "leaflet-bar ruler-toggle");
+    const link = L.DomUtil.create("a", "", container);
+    link.href = "#";
+    link.title = "Measure ride time between two points";
+    link.setAttribute("role", "button");
+    link.setAttribute("aria-pressed", "false");
+    link.setAttribute("aria-label", "Measure ride time");
+    link.innerHTML =
+      '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
+      '<path fill="none" stroke="currentColor" stroke-width="1.3" ' +
+      'd="M1.7 10.3 10.3 1.7l4 4-8.6 8.6z"/>' +
+      '<path fill="none" stroke="currentColor" stroke-width="1.1" ' +
+      'd="M4.5 8.4 6.1 10M6.7 6.2 8.3 7.8M8.9 4l1.6 1.6"/></svg>';
+    L.DomEvent.on(link, "click", (e) => {
+      L.DomEvent.stop(e);
+      rulerToggle(!RULER.on);
+    });
+    L.DomEvent.disableClickPropagation(container);
+    els.rulerButton = link;
+    return container;
+  },
+});
+
+function rulerBoot() {
+  RULER.layer = L.layerGroup().addTo(map);
+  RULER.line = L.polyline([], {
+    color: "#16202a",
+    weight: 3,
+    opacity: 0.85,
+    dashArray: "6 5",
+    interactive: false,
+  }).addTo(RULER.layer);
+  new RulerControl({ position: "topright" }).addTo(map);
+
+  for (const key of SPEED_METRICS) {
+    const metric = index.metrics.find((m) => m.key === key);
+    if (!metric) continue;
+    const option = document.createElement("option");
+    option.value = metric.key;
+    option.textContent = metric.label;
+    els.rulerMetric.append(option);
+  }
+  // Open on whatever the map is already coloured by, when that is a speed.
+  els.rulerMetric.value = SPEED_METRICS.includes(els.metric.value) ? els.metric.value : "v";
+
+  els.rulerMetric.addEventListener("change", rulerRedraw);
+  els.rulerClear.addEventListener("click", rulerClear);
+  document.addEventListener("keydown", (e) => {
+    if (!RULER.on) return;
+    if (e.key === "Escape") {
+      if (RULER.points.length) rulerClear();
+      else rulerToggle(false);
+    } else if (e.key === "Backspace" || e.key === "Delete") {
+      e.preventDefault();
+      rulerUndo();
+    }
+  });
+  rulerRedraw();
+}
 
 /* ---------- boot ---------- */
 
@@ -500,6 +802,7 @@ async function boot() {
   readUrl();
   paintLegend();
   syncHourLabel();
+  rulerBoot();
   els.note.textContent =
     `Buses only. Positions within ${index.stop_radius_m} m of a stop on the ` +
     `vehicle's own trip are excluded, so this is running speed. ` +

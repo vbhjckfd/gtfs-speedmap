@@ -149,6 +149,24 @@
       </p>
     </div>
 
+    <div class="ruler" id="ruler" hidden>
+      <div class="ruler-head">
+        <span>Ride time</span>
+        <button type="button" id="ruler-clear">Clear</button>
+      </div>
+      <div class="ruler-figures" id="ruler-figures"></div>
+      <label class="field ruler-field">
+        <span>Speed used</span>
+        <select id="ruler-metric"></select>
+      </label>
+      <p class="note">
+        Straight lines between the points you click, timed cell by cell — no waiting for the
+        bus, no detour onto the real street grid. Cells where the typical bus is standing count
+        as 3 km/h, so one of them cannot swallow the whole trip. Drag a point to move it,
+        Backspace to undo, Esc to clear.
+      </p>
+    </div>
+
     <!-- Crawlable and screen-reader text; the map itself is a canvas. -->
     <section class="visually-hidden">
       <h2>What this map shows</h2>

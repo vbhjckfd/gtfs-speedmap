@@ -142,6 +142,96 @@ input[type="range"] {
   text-decoration: underline;
 }
 
+/* ---------- ruler ---------- */
+
+/* Beside its own toggle rather than under the main panel, which on a short
+   window reaches most of the way down the left edge. */
+.ruler {
+  position: absolute;
+  top: 12px;
+  right: 56px;
+  z-index: 1000;
+  width: 230px;
+  padding: 10px 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 2px 14px rgba(20, 30, 40, 0.16);
+  backdrop-filter: blur(4px);
+  font-variant-numeric: tabular-nums;
+}
+
+.ruler-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ruler-head button {
+  padding: 1px 7px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.ruler-head button:hover {
+  color: var(--text);
+}
+
+.ruler-figures {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ruler-figures b {
+  font-size: 19px;
+  color: var(--text);
+}
+
+.ruler-sub {
+  margin-top: 2px;
+}
+
+.ruler-warn {
+  color: #b0512a;
+}
+
+.ruler-field {
+  margin: 9px 0 8px;
+}
+
+/* The toggle sits with the zoom buttons, so it borrows their chrome. */
+.ruler-toggle a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+
+.ruler-toggle a.active {
+  background: #3b6ea5;
+  color: #fff;
+}
+
+.ruler-vertex {
+  border: 2px solid #16202a;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(20, 30, 40, 0.4);
+  cursor: grab;
+}
+
+.ruler-on .leaflet-container {
+  cursor: crosshair;
+}
+
 /* Present to crawlers and screen readers, absent from the map. */
 .visually-hidden {
   position: absolute;
@@ -209,5 +299,20 @@ input[type="range"] {
   .panel {
     width: auto;
     right: 12px;
+  }
+
+  /* The panel now spans the window, so the ruler drops to the bottom edge. */
+  .ruler {
+    top: auto;
+    right: 12px;
+    bottom: 22px;
+    width: auto;
+    max-width: 260px;
+  }
+
+  /* Keyboard shortcuts on a phone are not worth the height they cost, and the
+     full note would push the box back up under the panel. */
+  .ruler .note {
+    display: none;
   }
 }
