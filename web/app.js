@@ -672,6 +672,7 @@ function projectOnRoute(route, latlng, maxOff) {
  */
 function timeAlongRoute(legs, stopDist, from, to, metric) {
   const values = legs[metric] || legs.med;
+  const charged = [];
   const known = values.filter((v) => v != null);
   if (!known.length) return null;
   const fill = known.reduce((sum, v) => sum + v, 0) / known.length;
@@ -679,6 +680,7 @@ function timeAlongRoute(legs, stopDist, from, to, metric) {
   let seconds = 0;
   let holes = 0;
   let covered = 0;
+  let measured = 0;
   for (let i = 0; i < values.length && i + 1 < stopDist.length; i++) {
     const start = stopDist[i];
     const end = stopDist[i + 1];
@@ -692,10 +694,23 @@ function timeAlongRoute(legs, stopDist, from, to, metric) {
       seconds += fill * fraction;
     } else {
       seconds += values[i] * fraction;
+      measured += 1;
     }
+    charged.push(legs.n[i] || 0);
     covered += 1;
   }
-  return covered ? { seconds, holes, legs: covered } : null;
+  // A stretch where nothing at all was observed is not a measurement of it,
+  // however confidently the route's average leg could fill it in.
+  if (!measured) return null;
+  charged.sort((x, y) => x - y);
+  return {
+    seconds,
+    holes,
+    legs: covered,
+    // The typical leg of this stretch, over exactly the legs that were charged
+    // for it — the weakest one was reporting a whole busy ride as "0 rides".
+    observations: charged[Math.floor(charged.length / 2)],
+  };
 }
 
 /**
@@ -750,7 +765,6 @@ function rideOptions(a, b) {
       if (stopDist[i] <= from.along) board = i;
       if (stopDist[i] <= to.along) alight = i;
     }
-    const spanned = legs.n.slice(board, Math.max(board + 1, alight));
     out.push({
       route,
       seconds: timed.seconds,
@@ -758,7 +772,7 @@ function rideOptions(a, b) {
       stops: Math.max(0, alight - board),
       holes: timed.holes,
       legs: timed.legs,
-      observations: spanned.length ? Math.min(...spanned) : 0,
+      observations: timed.observations,
       off: Math.max(from.off, to.off),
       from: from.along,
       to: to.along,
