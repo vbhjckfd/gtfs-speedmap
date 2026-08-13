@@ -31,7 +31,7 @@ from .config import (
     DEPOT_FILE,
     DEPOT_MAX_KMH,
     DEPOT_MIN_DIST_TO_STOP_M,
-    DEPOT_MIN_HOURS,
+    DEPOT_MIN_SLOTS,
     DEPOT_MIN_SAMPLES,
     DEPOT_PAD_M,
 )
@@ -44,28 +44,28 @@ _LINK_RADIUS_CELLS = 2
 
 
 def _stationary_cells(df: pd.DataFrame) -> pd.DataFrame:
-    """Cells that are slow, busy, and slow across many separate hours."""
-    per_hour = (
-        df.groupby(["cx", "cy", "hour"])[["n", "sum_speed", "sum_lat", "sum_lon"]]
+    """Cells that are slow, busy, and slow across many separate half-hours."""
+    per_slot = (
+        df.groupby(["cx", "cy", "slot"])[["n", "sum_speed", "sum_lat", "sum_lon"]]
         .sum()
         .reset_index()
     )
-    per_hour["kmh"] = per_hour["sum_speed"] / per_hour["n"] * MPS_TO_KMH
-    slow_hours = per_hour[per_hour["kmh"] <= DEPOT_MAX_KMH]
+    per_slot["kmh"] = per_slot["sum_speed"] / per_slot["n"] * MPS_TO_KMH
+    slow_slots = per_slot[per_slot["kmh"] <= DEPOT_MAX_KMH]
 
-    hours_slow = slow_hours.groupby(["cx", "cy"])["hour"].nunique()
+    slots_slow = slow_slots.groupby(["cx", "cy"])["slot"].nunique()
     cells = (
         df.groupby(["cx", "cy"])[["n", "sum_speed", "sum_lat", "sum_lon"]].sum().reset_index()
     )
     cells["kmh"] = cells["sum_speed"] / cells["n"] * MPS_TO_KMH
     cells["lat"] = cells["sum_lat"] / cells["n"]
     cells["lon"] = cells["sum_lon"] / cells["n"]
-    cells["hours_slow"] = cells.set_index(["cx", "cy"]).index.map(hours_slow).fillna(0).astype(int)
+    cells["slots_slow"] = cells.set_index(["cx", "cy"]).index.map(slots_slow).fillna(0).astype(int)
 
     return cells[
         (cells["kmh"] <= DEPOT_MAX_KMH)
         & (cells["n"] >= DEPOT_MIN_SAMPLES)
-        & (cells["hours_slow"] >= DEPOT_MIN_HOURS)
+        & (cells["slots_slow"] >= DEPOT_MIN_SLOTS)
     ]
 
 
@@ -211,7 +211,7 @@ def discover(force: bool = False, merge: bool = False) -> list[dict]:
                 "criteria": {
                     "max_kmh": DEPOT_MAX_KMH,
                     "min_samples": DEPOT_MIN_SAMPLES,
-                    "min_hours_slow": DEPOT_MIN_HOURS,
+                    "min_slots_slow": DEPOT_MIN_SLOTS,
                     "min_dist_to_stop_m": DEPOT_MIN_DIST_TO_STOP_M,
                     "pad_m": DEPOT_PAD_M,
                     "cell_size_m": CELL_SIZE_M,

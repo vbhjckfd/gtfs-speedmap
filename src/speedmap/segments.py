@@ -11,7 +11,7 @@ and keeps the elapsed time between adjacent stops — dwell, lights, queues and
 all. The output is keyed by the stop **pair**, not by the trip, so every variant
 of a route contributes to the same leg:
 
-    data/seg/YYYY-MM-DD.parquet      (month, hour, route, direction, pair) -> n, sum_s
+    data/seg/YYYY-MM-DD.parquet      (month, slot, route, direction, pair) -> n, sum_s
     data/seghist/YYYY-MM-DD.parquet  the same key plus a SEG_BIN_S-second bin
 
 A leg is timed against the canonical path of its route and direction — the
@@ -57,6 +57,7 @@ from .config import (
 from .grid import in_bbox, project, stops_near
 from .snapshots import VehicleRow, parse_feed
 from .static_feed import StaticFeed, load_for_date
+from .timeslots import slot_of
 
 _LOCAL_TZ = ZoneInfo(TZ)
 
@@ -242,7 +243,7 @@ def accumulate(
                 local = datetime.fromtimestamp(start, tz=timezone.utc).astimezone(_LOCAL_TZ)
                 key = (
                     local.strftime("%Y-%m"),
-                    local.hour,
+                    slot_of(local),
                     route_dir[0],
                     route_dir[1],
                     from_stop,
@@ -258,7 +259,7 @@ def accumulate(
                 hist[bin_key] = hist.get(bin_key, 0) + 1
 
 
-KEY_COLUMNS = ["month", "hour", "route_id", "direction", "from_stop", "to_stop"]
+KEY_COLUMNS = ["month", "slot", "route_id", "direction", "from_stop", "to_stop"]
 
 
 def segments_day(

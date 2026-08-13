@@ -21,6 +21,12 @@ def _float(name: str, default: float) -> float:
 # Grid cell edge in metres (UTM 35N eastings/northings).
 CELL_SIZE_M = _float("CELL_SIZE_M", 25.0)
 
+# Width of the time-of-day bin, in minutes (see timeslots.py). Half an hour
+# resolves the two halves of a rush hour, which differ more than two adjacent
+# off-peak hours do. Changing it invalidates every aggregate on disk: the bin is
+# baked into the parquet key, and a finer one cannot be recovered from a coarser.
+SLOT_MINUTES = _int("SLOT_MINUTES", 30)
+
 # A position within this distance of a stop *on its own trip* is dropped, so the
 # map shows running speed rather than dwell time.
 STOP_RADIUS_M = _float("STOP_RADIUS_M", 40.0)
@@ -36,11 +42,13 @@ STOP_BUCKET_M = _float("STOP_BUCKET_M", 100.0)
 # --- Depot discovery (see depots.py) -------------------------------------
 # Depots and off-street layover yards are not in GTFS, so they are mined from
 # the aggregates: knots of cells that are motionless, busy, and still
-# motionless across many separate hours of the day, far from any stop. The
-# hour count is what separates a depot from a junction that jams at rush hour.
+# motionless across many separate slots of the day, far from any stop. The
+# slot count is what separates a depot from a junction that jams at rush hour.
+# 20 half-hours is the same ten hours of standing still the hourly axis asked
+# for, and a jam that lasts ten hours of the day is not a jam.
 DEPOT_MAX_KMH = _float("DEPOT_MAX_KMH", 4.0)
 DEPOT_MIN_SAMPLES = _int("DEPOT_MIN_SAMPLES", 300)
-DEPOT_MIN_HOURS = _int("DEPOT_MIN_HOURS", 10)
+DEPOT_MIN_SLOTS = _int("DEPOT_MIN_SLOTS", 20)
 DEPOT_MIN_DIST_TO_STOP_M = _float("DEPOT_MIN_DIST_TO_STOP_M", 120.0)
 # Grown onto the observed extent of a site, since parked buses are only ever
 # sampled where they happen to stand.
@@ -56,15 +64,17 @@ SPEED_MAX_MPS = _float("SPEED_MAX_MPS", 25.0)
 # Cells with fewer samples than this are dropped from the web output.
 MIN_SAMPLES = _int("MIN_SAMPLES", 5)
 
-# The popup's hourly sparkline splits a cell 19 ways, so MIN_SAMPLES applied per
-# hour leaves half the cells with three bars or fewer — which reads as "no buses
-# ran at 14:00" rather than "not measured". A lower floor lifts the median cell
-# from 6 populated hours to 9; cells that still cannot fill PROFILE_MIN_HOURS
-# get no sparkline at all, because a two-bar chart misleads more than it tells.
+# The popup's sparkline splits a cell one bar per slot, so MIN_SAMPLES applied
+# per slot leaves half the cells with a handful of bars — which reads as "no
+# buses ran at 14:00" rather than "not measured". A lower floor keeps the
+# median cell's profile readable; cells that still cannot fill
+# PROFILE_MIN_SLOTS get no sparkline at all, because a two-bar chart misleads
+# more than it tells. Both are held at the same *share* of the day as the
+# hourly axis asked for — half-hour bins hold roughly half the samples each.
 PROFILE_MIN_SAMPLES = _int("PROFILE_MIN_SAMPLES", 3)
-PROFILE_MIN_HOURS = _int("PROFILE_MIN_HOURS", 6)
+PROFILE_MIN_SLOTS = _int("PROFILE_MIN_SLOTS", 12)
 
-# Hours and months are local-time concepts; the feed is UTC.
+# Slots and months are local-time concepts; the feed is UTC.
 TZ = os.environ.get("TZ_LOCAL", "Europe/Kyiv")
 
 # Concurrent R2 GETs.
@@ -82,7 +92,7 @@ SCALE_LOW_KMH = _float("SCALE_LOW_KMH", 5.0)
 SCALE_HIGH_KMH = _float("SCALE_HIGH_KMH", 35.0)
 
 # --- Relative speed ("% of free-flow") -----------------------------------
-# A cell's free-flow reference is its own p85 over every hour, month and day
+# A cell's free-flow reference is its own p85 over every slot, month and day
 # type, so the ratio answers "how congested is this bit of road right now"
 # rather than "is this bit of road fast" — the two are near-uncorrelated
 # (measured r = 0.07). The reference must be global: derive it per selection

@@ -7,7 +7,7 @@
     <title>Lviv bus speeds — average speed by hour and month, mapped</title>
     <meta
       name="description"
-      content="Where Lviv's buses actually run fast and where they crawl. Speed per 25 m of street, from millions of archived GTFS-RT positions, with an hour-of-day slider, a month picker and a weekday/weekend split. Shows average, median, percentiles, and speed as a share of each street's own free-flow. Stops excluded, so it shows running speed."
+      content="Where Lviv's buses actually run fast and where they crawl. Speed per 25 m of street, from millions of archived GTFS-RT positions, with a half-hourly time-of-day slider, a month picker and a weekday/weekend split. Shows average, median, percentiles, and speed as a share of each street's own free-flow. Stops excluded, so it shows running speed."
     />
     <link rel="canonical" href="https://gtfs-speedmap.vbhjckfd.workers.dev/" />
     <meta name="robots" content="index, follow" />
@@ -54,7 +54,7 @@
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": "Lviv bus running speeds by hour and month",
-        "description": "Average bus speed per 25 m grid cell in Lviv, Ukraine, aggregated by hour of day and month from archived GTFS-RT vehicle positions. Positions within 40 m of a stop on the vehicle's own trip are excluded, so the figures describe running speed rather than dwell time. Trolleybuses and trams are excluded.",
+        "description": "Average bus speed per 25 m grid cell in Lviv, Ukraine, aggregated by half-hour of day and month from archived GTFS-RT vehicle positions. Positions within 40 m of a stop on the vehicle's own trip are excluded, so the figures describe running speed rather than dwell time. Trolleybuses and trams are excluded.",
         "url": "https://gtfs-speedmap.vbhjckfd.workers.dev/",
         "license": "http://www.wtfpl.net/txt/copying/",
         "codeRepository": "https://github.com/vbhjckfd/gtfs-speedmap",
@@ -108,12 +108,15 @@
       </label>
 
       <label class="field">
-        <span>Hour <b id="hour-label">—</b></span>
-        <input type="range" id="hour" min="0" max="23" step="1" />
+        <span>Time <b id="slot-label">—</b></span>
+        <!-- Half-hour steps: the two halves of a rush hour are not the same
+             traffic, and an hourly slider averaged the difference away. Bounds
+             come from the data at boot. -->
+        <input type="range" id="slot" min="0" max="47" step="1" />
       </label>
 
       <label class="checkbox">
-        <input type="checkbox" id="all-hours" />
+        <input type="checkbox" id="all-slots" />
         <span>Whole day</span>
       </label>
 
@@ -173,7 +176,7 @@
       <p>
         Running speed of Lviv city buses, aggregated into 25-metre grid cells from GTFS-RT
         vehicle positions archived every ten seconds. Each dot is one cell: green means buses
-        move quickly there, red means they crawl. Use the hour slider to compare the morning
+        move quickly there, red means they crawl. Use the half-hour slider to compare the morning
         peak against the middle of the night, the month picker to compare months, and the day
         selector to separate weekdays from weekends — city-wide mean speed at 17:00 is about
         16.6 km/h on a weekday against 21.4 km/h at the weekend, so averaging the two together
@@ -187,7 +190,7 @@
         speed by that same cell's own 85th-percentile speed across the whole archive, which
         separates congestion from slowness: a narrow old-town lane that runs at 20 km/h at three
         in the morning is not congested, while a ring road down to 22 km/h from 40 is. Clicking
-        any cell shows every statistic for it along with its speed hour by hour.
+        any cell shows every statistic for it along with its speed through the day, half-hour by half-hour.
       </p>
       <h2>Ride time between two points</h2>
       <p>

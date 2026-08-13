@@ -1,7 +1,8 @@
 # gtfs-speedmap
 
 An OSM map of **bus running speed** in Lviv, one dot per 25 m cell, coloured green (fast) to red
-(slow), with an hour-of-day slider, a month picker and a weekday/weekend split — and a ruler that
+(slow), with a half-hourly time-of-day slider, a month picker and a weekday/weekend split — and a
+ruler that
 answers the other question, **how long the ride takes**, from the buses' own stop-to-stop times.
 
 Built from the GTFS-RT vehicle-position snapshots that
@@ -13,14 +14,14 @@ R2  static/YYYY-MM-DD/static.zip  GTFS schedule as archived that day
         │  python -m speedmap.aggregate --all   │  python -m speedmap.segments --all
         ▼                                       ▼
 data/agg/YYYY-MM-DD.parquet                 data/seg/YYYY-MM-DD.parquet
-  per-day sums, keyed (month, hour, cell)     stop-to-stop times, keyed (…, route, stop pair)
+  per-day sums, keyed (month, slot, cell)     stop-to-stop times, keyed (…, route, stop pair)
 data/hist/YYYY-MM-DD.parquet                data/seghist/YYYY-MM-DD.parquet
   per-day speed histograms, same key + bin    leg-time histograms, same key + bin
         │  python -m speedmap.sync push     ⇄  R2 derived/{agg,hist}/
         │  python -m speedmap.build_web
         ▼
-web/data/{month}-{days}-{hour}.json         what the map fetches
-web/data/rides-{month}-{days}-{hour}.json   what the ruler fetches
+web/data/{month}-{days}-{HHMM}.json         what the map fetches
+web/data/rides-{month}-{days}-{HHMM}.json   what the ruler fetches
         │  make deploy
         ▼
 Cloudflare Worker (assets-only)
@@ -55,7 +56,8 @@ GTFS publishes stops, not depots or off-street layover yards, and those are wher
 hours doing nothing. They are mined out of the aggregates instead, by
 [`depots.py`](src/speedmap/depots.py): cells that are motionless (≤ `DEPOT_MAX_KMH`), busy
 (≥ `DEPOT_MIN_SAMPLES`), more than `DEPOT_MIN_DIST_TO_STOP_M` from any **mid-route** stop, and — the
-part that matters — still motionless across at least `DEPOT_MIN_HOURS` *separate hours of the day*.
+part that matters — still motionless across at least `DEPOT_MIN_SLOTS` *separate half-hours of the
+day*.
 A junction that jams at rush hour fails that last test; a yard full of parked buses passes it at
 05:00 and at 23:00 alike. Neighbouring cells are clustered into one site, and the site radius is its
 observed extent plus `DEPOT_PAD_M`.
@@ -148,9 +150,10 @@ independent. A narrow old-town lane doing 20 km/h at 03:00 is not congested; a r
 shift meaninglessly as the slider moves. Cells whose reference is under `REL_MIN_FF_KMH` report
 nothing, because a ratio against a 5 km/h free-flow is noise over noise.
 
-Sample counts per cell: a single month at a single hour has a median of 5 samples and only 31% of
-cells at 15 or more, so the percentiles are firmest on the all-months views and on busy corridors —
-the popup shows the sample count behind every cell, alongside its speed hour by hour.
+Sample counts per cell: the bins are half an hour wide, so a single month at a single slot holds
+about half of what an hourly bin did — a median of 2–3 samples, which is why the percentiles are
+firmest on the all-months views and on busy corridors. The popup shows the sample count behind
+every cell, alongside its speed through the day.
 
 ## How long the ride takes
 
@@ -172,12 +175,12 @@ queue at the light, the wait to pull out.
 R2  raw/YYYY-MM-DD/*.pb
         │  python -m speedmap.segments --all
         ▼
-data/seg/YYYY-MM-DD.parquet       (month, hour, route, direction, stop pair) -> n, sum_s
+data/seg/YYYY-MM-DD.parquet       (month, slot, route, direction, stop pair) -> n, sum_s
 data/seghist/YYYY-MM-DD.parquet   the same key plus a 5-second bin
 data/paths.json                   route paths and stop geometry, from the schedule
         │  python -m speedmap.build_web
         ▼
-web/data/rides-{month}-{days}-{hour}.json   per route, one figure per leg of its path
+web/data/rides-{month}-{days}-{HHMM}.json   per route, one figure per leg of its path
 web/data/paths.json
 ```
 
@@ -324,11 +327,12 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 | `HIST_BIN_KMH` | 1 | Histogram resolution, and so every percentile's resolution. |
 | `FREE_FLOW_Q` | 0.85 | Which percentile counts as a cell's free-flow reference. |
 | `REL_MIN_FF_KMH` | 8 | Below this reference speed, "% of free-flow" reports nothing. |
-| `PROFILE_MIN_SAMPLES` | 3 | Per-hour floor for the popup sparkline (see below). |
-| `PROFILE_MIN_HOURS` | 6 | Cells measured in fewer hours get no sparkline at all. |
+| `SLOT_MINUTES` | 30 | Width of the time-of-day bin. Changing it invalidates every aggregate on disk. |
+| `PROFILE_MIN_SAMPLES` | 3 | Per-slot floor for the popup sparkline (see below). |
+| `PROFILE_MIN_SLOTS` | 12 | Cells measured in fewer half-hours get no sparkline at all. |
 | `DEPOT_MAX_KMH` | 4 | How slow a cell must be to be depot-like. |
 | `DEPOT_MIN_SAMPLES` | 300 | How busy. |
-| `DEPOT_MIN_HOURS` | 10 | In how many separate hours — what separates a yard from a jam. |
+| `DEPOT_MIN_SLOTS` | 20 | In how many separate half-hours — what separates a yard from a jam. |
 | `DEPOT_MIN_DIST_TO_STOP_M` | 120 | How far the nearest mid-route stop must be, so dwell is not mistaken for parking. |
 | `DEPOT_PAD_M` | 40 | Grown onto each site's observed extent. |
 | `SCALE_LOW_KMH` / `SCALE_HIGH_KMH` | 5 / 35 | Colour ramp ends. Measured cell speeds: p25 ≈ 13, p50 ≈ 21, p90 ≈ 41 km/h. |
@@ -336,11 +340,11 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 Changing a filter means re-running `make ingest-all --force`; changing `MIN_SAMPLES`, a percentile
 or the colour scale only needs `make build`.
 
-`PROFILE_MIN_SAMPLES` is lower than `MIN_SAMPLES` because the sparkline splits a cell 19 ways: at
-the map's own floor, half of all cells end up with three bars or fewer, which reads as "no buses ran
-at 14:00" rather than "not measured". Dropping the floor to 3 lifts the median cell from 6 populated
-hours to 9, and cells that still cannot fill `PROFILE_MIN_HOURS` get no sparkline — a two-bar chart
-misleads more than it tells.
+`PROFILE_MIN_SAMPLES` is lower than `MIN_SAMPLES` because the sparkline splits a cell one bar per
+slot — 38 of them: at the map's own floor most cells end up with a handful of bars, which reads as
+"no buses ran at 14:00" rather than "not measured". Dropping the floor to 3 keeps the median cell's
+profile readable, and cells that still cannot fill `PROFILE_MIN_SLOTS` get no sparkline — a two-bar
+chart misleads more than it tells.
 
 ## Sharing a view
 
@@ -348,18 +352,18 @@ The whole selection lives in the query string, viewport included, so a link can 
 junction rather than the whole city:
 
 ```
-https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=rel&z=16&lat=49.8408&lon=24.0219
+https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&t=0830&stat=rel&z=16&lat=49.8408&lon=24.0219
 ```
 
-`month` takes `all` or `YYYY-MM`; `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
-`stat` takes `v`, `med`, `p15`, `p85`, `spread` or `rel`. Anything unrecognised falls back to the
-default rather than erroring, and a link written before an axis existed still opens — `days`
-defaults to `all`. The canonical link stays on the bare homepage on purpose — one page for search
+`month` takes `all` or `YYYY-MM`; `days` takes `all`, `wd` or `we`; `t` takes `all` or `HHMM` on the
+half hour; `stat` takes `v`, `med`, `p15`, `p85`, `spread` or `rel`. Anything unrecognised falls back
+to the default rather than erroring, and a link written before an axis existed still opens — `days`
+defaults to `all`, and the older `hour=08` is still read as the 08:00 slot. The canonical link stays on the bare homepage on purpose — one page for search
 engines to index, not a thousand near-identical ones. Slider moves and pans use `replaceState`, so
 dragging does not bury the previous page under twenty history entries.
 
-With no query string at all, the map opens on the current hour **in Kyiv**, not the visitor's own
-timezone, clamped to the nearest hour the collector actually polls.
+With no query string at all, the map opens on the current half-hour **in Kyiv**, not the visitor's
+own timezone, clamped to the nearest slot the collector actually polls.
 
 ## Known artefacts
 
@@ -368,7 +372,7 @@ timezone, clamped to the nearest hour the collector actually polls.
 - A site added since the last full re-ingest is masked only at build time, so its samples are still
   in `data/agg/`. The map is right either way, but any *analysis* over those parquets sees the site
   as ordinary slow cells and will mislead — before the last re-ingest one such core read as 123k
-  samples at 1.2 km/h, slow in sixteen separate hours, which made a proposed change to the depot
+  samples at 1.2 km/h, slow in thirty-odd separate half-hours, which made a proposed change to the depot
   heuristics look far more justified than it was. Run `make ingest-all ARGS=--force` first when
   measuring what the mask has left behind. Right now exactly one site is in that state
   (Воля-Гомулецька, 3.4k samples).

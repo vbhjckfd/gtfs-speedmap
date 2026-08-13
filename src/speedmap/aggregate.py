@@ -1,7 +1,8 @@
 """Aggregate one day of archived snapshots into per-cell average bus speed.
 
-Output: data/agg/YYYY-MM-DD.parquet, keyed by (month, hour, cx, cy) with
-running sums, so days can be merged later without revisiting R2.
+Output: data/agg/YYYY-MM-DD.parquet, keyed by (month, slot, cx, cy) with
+running sums, so days can be merged later without revisiting R2. A slot is a
+half-hour of local time (see timeslots.py).
 
 Run:
     python -m speedmap.aggregate 2026-07-15
@@ -36,6 +37,7 @@ from .depots import load_sites
 from .grid import cell_of, in_bbox, near_trip_stop, project
 from .snapshots import VehicleRow, parse_feed
 from .static_feed import StaticFeed, load_for_date
+from .timeslots import slot_of
 from .utm import project_xy
 
 _LOCAL_TZ = ZoneInfo(TZ)
@@ -149,7 +151,7 @@ def accumulate(
 
         local = datetime.fromtimestamp(row.veh_ts, tz=timezone.utc).astimezone(_LOCAL_TZ)
         cx, cy = cell_of(x, y)
-        key = (local.strftime("%Y-%m"), local.hour, cx, cy)
+        key = (local.strftime("%Y-%m"), slot_of(local), cx, cy)
         bucket = acc.get(key)
         if bucket is None:
             acc[key] = [1, speed, lat, lon]
@@ -196,14 +198,14 @@ def aggregate_day(
 
     cells = pd.DataFrame(
         [
-            (month, hour, cx, cy, n, s_speed, s_lat, s_lon)
-            for (month, hour, cx, cy), (n, s_speed, s_lat, s_lon) in acc.items()
+            (month, slot, cx, cy, n, s_speed, s_lat, s_lon)
+            for (month, slot, cx, cy), (n, s_speed, s_lat, s_lon) in acc.items()
         ],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        columns=["month", "slot", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
     bins = pd.DataFrame(
-        [(month, hour, cx, cy, b, n) for (month, hour, cx, cy, b), n in hist.items()],
-        columns=["month", "hour", "cx", "cy", "bin", "n"],
+        [(month, slot, cx, cy, b, n) for (month, slot, cx, cy, b), n in hist.items()],
+        columns=["month", "slot", "cx", "cy", "bin", "n"],
     )
     return cells, bins, stats
 

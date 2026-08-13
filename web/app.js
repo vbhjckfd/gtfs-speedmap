@@ -2,7 +2,7 @@
  *
  * Draws one dot per 25 m cell on a canvas overlay. Leaflet's own vector layer
  * creates a path per marker, which stalls well below the ~40k cells a busy
- * hour produces, so the dots are painted straight onto a single canvas.
+ * half-hour produces, so the dots are painted straight onto a single canvas.
  */
 
 const DATA = "data";
@@ -17,9 +17,9 @@ let requestSeq = 0;
 const els = {
   month: document.getElementById("month"),
   daytype: document.getElementById("daytype"),
-  hour: document.getElementById("hour"),
-  hourLabel: document.getElementById("hour-label"),
-  allHours: document.getElementById("all-hours"),
+  slot: document.getElementById("slot"),
+  slotLabel: document.getElementById("slot-label"),
+  allSlots: document.getElementById("all-slots"),
   metric: document.getElementById("metric"),
   subtitle: document.getElementById("subtitle"),
   note: document.getElementById("note"),
@@ -204,12 +204,47 @@ function speedValues(payload) {
   return source[els.metric.value] || source.v;
 }
 
-function hourKey() {
-  return els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0");
+/* ---------- time of day ---------- */
+
+// A slot is an index of `index.slot_minutes` from local midnight — half an
+// hour, which is what separates the front of a rush hour from the back of it.
+// Nothing below hard-codes thirty: change the bin in config.py, rebuild, and
+// every label, filename and step here follows the data.
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function slotMinutes() {
+  return index.slot_minutes;
+}
+
+function clock(minutes) {
+  return `${pad2(Math.floor(minutes / 60) % 24)}:${pad2(minutes % 60)}`;
+}
+
+// 08:30 — the moment the slot opens.
+function slotTime(slot) {
+  return clock(slot * slotMinutes());
+}
+
+// 08:30–08:59 — the whole slot, inclusive, as a reader would say it.
+function slotSpan(slot) {
+  const start = slot * slotMinutes();
+  return `${clock(start)}–${clock(start + slotMinutes() - 1)}`;
+}
+
+// 0830 — as it appears in a payload filename.
+function slotFile(slot) {
+  const start = slot * slotMinutes();
+  return `${pad2(Math.floor(start / 60))}${pad2(start % 60)}`;
+}
+
+function slotKey() {
+  return els.allSlots.checked ? "all" : slotFile(Number(els.slot.value));
 }
 
 function selectionKey() {
-  return `${els.month.value}-${els.daytype.value}-${hourKey()}`;
+  return `${els.month.value}-${els.daytype.value}-${slotKey()}`;
 }
 
 function profileKey() {
@@ -226,7 +261,7 @@ function writeUrl() {
   const params = new URLSearchParams({
     month: els.month.value,
     days: els.daytype.value,
-    hour: hourKey(),
+    t: slotKey(),
     stat: els.metric.value,
     // The viewport too, so a link can point at one junction rather than the
     // whole city. 5 dp is well under a cell.
@@ -239,20 +274,22 @@ function writeUrl() {
   history.replaceState(null, "", `?${params}`);
 }
 
-// The hour bins are local to the feed's city, so "now" means now *there* —
-// a visitor in another timezone still lands on the hour Lviv is living.
-function currentHour() {
+// The bins are local to the feed's city, so "now" means now *there* — a
+// visitor in another timezone still lands on the half-hour Lviv is living.
+function currentSlot() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: index.timezone,
     hour: "numeric",
+    minute: "numeric",
     hour12: false,
   }).formatToParts(new Date());
-  const hour = Number(parts.find((p) => p.type === "hour").value);
-  // The collector sleeps 00:00–04:00, so those hours have no data at all;
-  // land on the nearest hour that does.
-  return index.hours.reduce(
-    (best, h) => (Math.abs(h - hour) < Math.abs(best - hour) ? h : best),
-    index.hours[0],
+  const at = (part) => Number(parts.find((p) => p.type === part).value);
+  const now = Math.floor((at("hour") * 60 + at("minute")) / slotMinutes());
+  // The collector sleeps 00:00–04:00, so those slots have no data at all;
+  // land on the nearest one that does.
+  return index.slots.reduce(
+    (best, s) => (Math.abs(s - now) < Math.abs(best - now) ? s : best),
+    index.slots[0],
   );
 }
 
@@ -276,11 +313,15 @@ function readUrl() {
     map.setView([lat, lon], zoom);
   }
 
-  const hour = params.get("hour");
-  if (hour === "all") {
-    els.allHours.checked = true;
-  } else if (hour !== null && index.hours.includes(Number(hour))) {
-    els.hour.value = String(Number(hour));
+  // `t` is HHMM; `hour` is what links made before the half-hour split carry,
+  // and an old link should still land where it meant to rather than nowhere.
+  const legacy = params.get("hour");
+  const time = params.get("t") ?? (legacy === null ? null : legacy.padStart(2, "0") + "00");
+  if (time === "all") {
+    els.allSlots.checked = true;
+  } else if (time !== null && /^\d{4}$/.test(time)) {
+    const slot = Math.floor((Number(time.slice(0, 2)) * 60 + Number(time.slice(2))) / slotMinutes());
+    if (index.slots.includes(slot)) els.slot.value = String(slot);
   }
 
   const stat = params.get("stat");
@@ -305,13 +346,13 @@ async function fetchSelection(key) {
 }
 
 function prefetchNeighbours() {
-  if (els.allHours.checked) return;
-  const hours = index.hours;
-  const at = hours.indexOf(Number(els.hour.value));
+  if (els.allSlots.checked) return;
+  const slots = index.slots;
+  const at = slots.indexOf(Number(els.slot.value));
   [at - 1, at + 1].forEach((i) => {
-    if (i >= 0 && i < hours.length) {
-      const hour = String(hours[i]).padStart(2, "0");
-      fetchSelection(`${els.month.value}-${els.daytype.value}-${hour}`).catch(() => {});
+    if (i >= 0 && i < slots.length) {
+      const key = `${els.month.value}-${els.daytype.value}-${slotFile(slots[i])}`;
+      fetchSelection(key).catch(() => {});
     }
   });
 }
@@ -320,8 +361,7 @@ function describe(count) {
   const parts = [els.month.selectedOptions[0].textContent];
   // "All days" is the default, so saying so is noise; a restriction is not.
   if (els.daytype.value !== "all") parts.push(els.daytype.selectedOptions[0].textContent);
-  const hour = String(els.hour.value).padStart(2, "0");
-  parts.push(els.allHours.checked ? "all hours" : `${hour}:00–${hour}:59`);
+  parts.push(els.allSlots.checked ? "all hours" : slotSpan(Number(els.slot.value)));
   parts.push(`${count.toLocaleString()} cells`);
   parts.push(els.metric.selectedOptions[0].textContent.toLowerCase());
   return parts.join(" · ");
@@ -343,18 +383,16 @@ async function render() {
     dots.redraw();
     els.subtitle.textContent = `no data for this selection (${err.message})`;
   }
-  // A new hour is a new set of speeds, so a line already on the map is timed
-  // again against them.
+  // A new half-hour is a new set of speeds, so a line already on the map is
+  // timed again against them.
   if (RULER.on) rulerRedraw();
   prefetchNeighbours();
 }
 
-function syncHourLabel() {
-  const disabled = els.allHours.checked;
-  els.hour.disabled = disabled;
-  els.hourLabel.textContent = disabled
-    ? "all"
-    : `${String(els.hour.value).padStart(2, "0")}:00`;
+function syncSlotLabel() {
+  const disabled = els.allSlots.checked;
+  els.slot.disabled = disabled;
+  els.slotLabel.textContent = disabled ? "all" : slotTime(Number(els.slot.value));
 }
 
 /* ---------- popup ---------- */
@@ -425,14 +463,18 @@ function nearestIndex(source, latlng, maxDistance) {
   return { index: best, distance: Math.sqrt(bestDist) };
 }
 
-// Speed by hour for one cell, drawn as bars on the same colour ramp as the map
-// so a red bar in the sparkline means the same thing as a red dot on it.
-function sparkline(values, hours, selected) {
+// Speed through the day for one cell, one bar per half-hour, drawn on the same
+// colour ramp as the map so a red bar means what a red dot means.
+//
+// Twice as many bars as the hourly profile had, so they are correspondingly
+// narrower: the chart has to stay inside a popup, and the shape of the day —
+// which is what it is read for — survives the thinner bars.
+function sparkline(values, slots, selected) {
   const known = values.filter((v) => v >= 0);
   if (!known.length) return "";
   const top = Math.max(...known);
-  const width = 8;
-  const gap = 1.6;
+  const width = 4;
+  const gap = 0.8;
   const height = 34;
   const bars = values
     .map((value, i) => {
@@ -441,7 +483,7 @@ function sparkline(values, hours, selected) {
         return `<rect x="${x}" y="${height - 1}" width="${width}" height="1" fill="#c9d0d9"/>`;
       }
       const h = Math.max(1.5, (value / top) * height);
-      const marked = hours[i] === selected;
+      const marked = slots[i] === selected;
       return (
         `<rect x="${x}" y="${(height - h).toFixed(1)}" width="${width}" height="${h.toFixed(1)}"` +
         ` fill="${speedColor(value)}"${marked ? ' stroke="#16202a" stroke-width="1.2"' : ""}/>`
@@ -451,10 +493,10 @@ function sparkline(values, hours, selected) {
   const span = values.length * (width + gap) - gap;
   return (
     `<svg class="spark" viewBox="0 0 ${span} ${height + 12}" width="${span}" ` +
-    `height="${height + 12}" role="img" aria-label="Speed by hour of day">` +
-    `${bars}<text x="0" y="${height + 10}" class="spark-tick">${hours[0]}:00</text>` +
+    `height="${height + 12}" role="img" aria-label="Speed by time of day">` +
+    `${bars}<text x="0" y="${height + 10}" class="spark-tick">${slotTime(slots[0])}</text>` +
     `<text x="${span}" y="${height + 10}" text-anchor="end" class="spark-tick">` +
-    `${hours[hours.length - 1]}:00</text></svg>`
+    `${slotTime(slots[slots.length - 1])}</text></svg>`
   );
 }
 
@@ -463,10 +505,10 @@ async function cellProfile(latlng) {
   if (!profile.lat.length) return "";
   const hit = nearestIndex(profile, latlng, index.cell_size_m);
   if (hit.index < 0 || hit.distance > index.cell_size_m) return "";
-  const width = profile.hours.length;
+  const width = profile.slots.length;
   const values = profile.q.slice(hit.index * width, (hit.index + 1) * width);
-  const selected = els.allHours.checked ? -1 : Number(els.hour.value);
-  return sparkline(values, profile.hours, selected);
+  const selected = els.allSlots.checked ? -1 : Number(els.slot.value);
+  return sparkline(values, profile.slots, selected);
 }
 
 function popupContent(i, spark) {
@@ -500,7 +542,7 @@ map.on("click", (e) => {
   const at = L.latLng(current.lat[hit.index], current.lon[hit.index]);
   const popup = L.popup()
     .setLatLng(at)
-    .setContent(popupContent(hit.index, "speed by hour…"))
+    .setContent(popupContent(hit.index, "speed through the day…"))
     .openOn(map);
 
   // The profile file is a megabyte or so, so it loads on the first click and is
@@ -511,7 +553,7 @@ map.on("click", (e) => {
   cellProfile(at)
     .then((svg) => {
       if (map.hasLayer(popup)) {
-        popup.setContent(popupContent(hit.index, svg || "no hourly profile here"));
+        popup.setContent(popupContent(hit.index, svg || "no profile for this cell"));
       }
     })
     .catch(() => {});
@@ -566,7 +608,7 @@ const RULER_PANE = "rulerPane";
 const RIDE_ROWS = 4;
 
 function ridesKey() {
-  return `rides-${els.month.value}-${els.daytype.value}-${hourKey()}`;
+  return `rides-${els.month.value}-${els.daytype.value}-${slotKey()}`;
 }
 
 // Average or median of the observed leg times, whichever the dropdown says.
@@ -852,8 +894,8 @@ function ridesReadout() {
   if (RULER.points.length === 1) {
     return `<div class="ride-empty">Click again for where you are going. Drag either end to move it.</div>`;
   }
-  // Stale figures from the previous hour are worse than none while the new
-  // ones are on their way.
+  // Stale figures from the previous half-hour are worse than none while the
+  // new ones are on their way.
   if (!RIDES.paths || !RIDES.data || RIDES.key !== ridesKey()) {
     return `<div class="ride-empty">looking for buses…</div>`;
   }
@@ -1132,14 +1174,14 @@ async function boot() {
 
   KMH_METRIC.scale = { low: index.scale.low_kmh, high: index.scale.high_kmh };
 
-  const hours = index.hours;
-  els.hour.min = String(hours[0]);
-  els.hour.max = String(hours[hours.length - 1]);
-  els.hour.value = String(currentHour());
+  const slots = index.slots;
+  els.slot.min = String(slots[0]);
+  els.slot.max = String(slots[slots.length - 1]);
+  els.slot.value = String(currentSlot());
 
   readUrl();
   paintLegend();
-  syncHourLabel();
+  syncSlotLabel();
   rulerBoot();
   els.note.textContent =
     `Buses only. Positions within ${index.stop_radius_m} m of a stop on the ` +
@@ -1152,12 +1194,12 @@ async function boot() {
 
   els.month.addEventListener("change", render);
   els.daytype.addEventListener("change", render);
-  els.hour.addEventListener("input", () => {
-    syncHourLabel();
+  els.slot.addEventListener("input", () => {
+    syncSlotLabel();
     render();
   });
-  els.allHours.addEventListener("change", () => {
-    syncHourLabel();
+  els.allSlots.addEventListener("change", () => {
+    syncSlotLabel();
     render();
   });
   // Every statistic is already in the loaded payload, so this is a repaint.

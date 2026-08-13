@@ -274,14 +274,15 @@ def test_accumulator_averages_and_bins(feed):
     )
     assert stats["kept"] == 2
     assert len(acc) == 1
-    (month, hour, _cx, _cy), (n, sum_speed, sum_lat, _sum_lon) = next(iter(acc.items()))
+    (month, slot, _cx, _cy), (n, sum_speed, sum_lat, _sum_lon) = next(iter(acc.items()))
     assert n == 2
     assert sum_speed == pytest.approx(16.0)
     # float32 in the wire format, hence the loose tolerance.
     assert sum_lat / n == pytest.approx(MOVING["lat"], abs=1e-5)
-    # FEED_TS is 2026-08-06T07:06:40Z → 10:06 in Kyiv (UTC+3), not 07:00.
+    # FEED_TS is 2026-08-06T07:06:40Z → 10:06 in Kyiv (UTC+3), not 07:00, and
+    # 10:06 is the first half of the hour.
     assert month == "2026-08"
-    assert hour == 10
+    assert slot == 20
 
 
 def test_cells_are_true_25_m_squares():

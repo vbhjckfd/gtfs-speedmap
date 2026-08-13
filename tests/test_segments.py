@@ -17,7 +17,7 @@ from speedmap.static_feed import _build
 
 from .test_filters import STOP_FAR, STOP_NORTH, STOP_START, make_static_zip
 
-T0 = 1_786_000_000  # a Wednesday, 09:xx local
+T0 = 1_786_000_000  # a Wednesday, 10:06 local
 STEP_S = 10
 
 
@@ -141,16 +141,16 @@ def test_holes_are_detected(times, expected):
     assert _observed_without_holes(times, times[0], times[-1]) is expected
 
 
-def test_accumulate_keys_by_route_direction_and_local_hour(feed):
+def test_accumulate_keys_by_route_direction_and_local_half_hour(feed):
     acc, hist, stats = {}, {}, SegStats()
     accumulate({("BUS1", "100_0_0", "R_BUS"): a_run()}, feed, acc, hist, stats)
 
     assert len(acc) == 2
     months = {key[0] for key in acc}
-    hours = {key[1] for key in acc}
+    slots = {key[1] for key in acc}
     assert months == {"2026-08"}
-    assert hours == {10}  # T0 is 10:xx in Europe/Kyiv
-    assert acc[("2026-08", 10, "R_BUS", "0", "START", "N")] == [1, 120]
+    assert slots == {20}  # T0 is 10:06 in Europe/Kyiv, the 10:00–10:29 slot
+    assert acc[("2026-08", 20, "R_BUS", "0", "START", "N")] == [1, 120]
     assert sum(hist.values()) == 2
 
 

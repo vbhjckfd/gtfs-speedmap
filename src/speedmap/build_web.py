@@ -1,14 +1,14 @@
 """Merge the per-day aggregates into the JSON the viewer loads.
 
-Emits one file per (month, daytype, hour) selection, with "all" rollups on
-every axis:
+Emits one file per (month, daytype, slot) selection — a slot being a half-hour
+of local time — with "all" rollups on every axis:
 
-    web/data/2026-07-wd-08.json       July weekdays, 08:00–08:59 local
+    web/data/2026-07-wd-0830.json     July weekdays, 08:30–08:59 local
     web/data/2026-07-all-all.json     July, every day, whole day
-    web/data/all-we-17.json           every month, weekends, 17:00–17:59
+    web/data/all-we-1700.json         every month, weekends, 17:00–17:29
     web/data/all-all-all.json         everything
-    web/data/profile-all-wd.json      per-cell speed by hour, for the popup
-    web/data/rides-all-wd-08.json     observed leg times per route, same selection
+    web/data/profile-all-wd.json      per-cell speed by half-hour, for the popup
+    web/data/rides-all-wd-0830.json   observed leg times per route, same selection
     web/data/paths.json               route paths and stop geometry, once
     web/data/index.json               menu contents, metrics, colour scales
 
@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from .depots import load_sites
+from .timeslots import SLOTS_PER_DAY, slot_key, slot_label
 from .utm import project_xy
 from .config import (
     AGG_DIR,
@@ -43,13 +44,14 @@ from .config import (
     SEG_HIST_DIR,
     SEG_MIN_OBS,
     STOP_PASS_RADIUS_M,
-    PROFILE_MIN_HOURS,
     PROFILE_MIN_SAMPLES,
+    PROFILE_MIN_SLOTS,
     REL_MIN_FF_KMH,
     REL_SCALE_HIGH,
     REL_SCALE_LOW,
     SCALE_HIGH_KMH,
     SCALE_LOW_KMH,
+    SLOT_MINUTES,
     SPREAD_SCALE_HIGH_KMH,
     SPREAD_SCALE_LOW_KMH,
     STOP_RADIUS_M,
@@ -62,7 +64,7 @@ MPS_TO_KMH = 3.6
 ALL = "all"
 NO_DATA = -1  # profile sentinel: an int array stays half the size of one with nulls
 
-# Base day types. Saturday and Sunday differ by at most 1.5 km/h at every hour,
+# Base day types. Saturday and Sunday differ by at most 1.5 km/h at every slot,
 # against a 4–5 km/h weekday/weekend gap, so splitting them three ways would
 # only halve the samples behind each weekend cell for no signal.
 DAYTYPES = ("wd", "we")
@@ -154,6 +156,15 @@ def load_base_slices() -> tuple[dict, dict, list[str]]:
     paths = sorted(AGG_DIR.glob("*.parquet"))
     if not paths:
         raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest-all` first")
+    # Aggregates written against the hourly axis cannot be split into
+    # half-hours after the fact — the timestamp is gone. Say so here rather
+    # than dying on a missing column three functions deeper.
+    if "slot" not in pd.read_parquet(paths[0]).columns:
+        raise SystemExit(
+            f"{paths[0].name} is keyed by hour, not by {SLOT_MINUTES}-minute slot — "
+            "the finer bin cannot be recovered from the coarser one. "
+            "Re-ingest with `make ingest-all ARGS=--force` (and `make segments-all ARGS=--force`)."
+        )
 
     cell_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
     hist_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
@@ -175,13 +186,13 @@ def load_base_slices() -> tuple[dict, dict, list[str]]:
 
     cell_slices = {
         key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *CELL_KEYS], as_index=False, sort=False)[CELL_SUMS]
+        .groupby(["slot", *CELL_KEYS], as_index=False, sort=False)[CELL_SUMS]
         .sum()
         for key, parts in cell_parts.items()
     }
     hist_slices = {
         key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *CELL_KEYS, "bin"], as_index=False, sort=False)["n"]
+        .groupby(["slot", *CELL_KEYS, "bin"], as_index=False, sort=False)["n"]
         .sum()
         for key, parts in hist_parts.items()
     }
@@ -257,9 +268,9 @@ def _medians(bins: pd.DataFrame) -> pd.Series:
 
 
 def free_flow(hist_slices: dict) -> pd.Series:
-    """Each cell's free-flow reference: its p85 over every hour and day type.
+    """Each cell's free-flow reference: its p85 over every slot and day type.
 
-    Collapsing hour and bin before summing keeps this far smaller than the
+    Collapsing slot and bin before summing keeps this far smaller than the
     all-months slice it is derived from.
     """
     parts = [
@@ -399,8 +410,8 @@ def _payload(group: pd.DataFrame, bins: pd.DataFrame, ff: pd.Series | None = Non
     }
 
 
-def _profile(group: pd.DataFrame, hours: list[int]) -> dict:
-    """Per-cell mean speed by hour, for the popup sparkline.
+def _profile(group: pd.DataFrame, slots: list[int]) -> dict:
+    """Per-cell mean speed by half-hour, for the popup sparkline.
 
     Carries its own coordinates on purpose. A payload's lat/lon is the mean of
     the samples in *that* selection, so it shifts between selections and cannot
@@ -408,34 +419,34 @@ def _profile(group: pd.DataFrame, hours: list[int]) -> dict:
     """
     cells = _cells_of(group)
     if cells.empty:
-        return {"lat": [], "lon": [], "hours": hours, "q": [], "no_data": NO_DATA}
+        return {"lat": [], "lon": [], "slots": slots, "q": [], "no_data": NO_DATA}
 
     index = pd.MultiIndex.from_frame(cells[CELL_KEYS])
-    by_hour = group.groupby(["hour", *CELL_KEYS], sort=False)[["n", "sum_speed"]].sum()
-    speed = (by_hour["sum_speed"] / by_hour["n"] * MPS_TO_KMH).where(
-        by_hour["n"] >= PROFILE_MIN_SAMPLES
+    by_slot = group.groupby(["slot", *CELL_KEYS], sort=False)[["n", "sum_speed"]].sum()
+    speed = (by_slot["sum_speed"] / by_slot["n"] * MPS_TO_KMH).where(
+        by_slot["n"] >= PROFILE_MIN_SAMPLES
     )
 
     columns = []
-    for hour in hours:
+    for slot in slots:
         try:
-            at_hour = speed.xs(hour, level="hour")
+            at_slot = speed.xs(slot, level="slot")
         except KeyError:
             columns.append(np.full(len(cells), np.nan))
             continue
-        columns.append(index.map(at_hour).to_numpy(dtype=float))
+        columns.append(index.map(at_slot).to_numpy(dtype=float))
 
     grid = np.round(np.column_stack(columns)).astype(float)
-    # A cell measured in only a handful of hours has no profile worth drawing,
+    # A cell measured in only a handful of slots has no profile worth drawing,
     # and carrying it would nearly double the file for nothing.
-    keep = (~np.isnan(grid)).sum(axis=1) >= PROFILE_MIN_HOURS
+    keep = (~np.isnan(grid)).sum(axis=1) >= PROFILE_MIN_SLOTS
     grid = grid[keep]
     cells = cells[keep]
     grid[np.isnan(grid)] = NO_DATA
     return {
         "lat": cells["lat"].to_numpy().round(5).tolist(),
         "lon": cells["lon"].to_numpy().round(5).tolist(),
-        "hours": hours,
+        "slots": slots,
         "q": grid.astype(int).ravel().tolist(),
         "no_data": NO_DATA,
     }
@@ -473,13 +484,13 @@ def load_ride_slices() -> tuple[dict, dict, list[dict], dict]:
 
     leg_slices = {
         key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *SEG_KEYS], as_index=False, sort=False)[SEG_SUMS]
+        .groupby(["slot", *SEG_KEYS], as_index=False, sort=False)[SEG_SUMS]
         .sum()
         for key, parts in leg_parts.items()
     }
     bin_slices = {
         key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *SEG_KEYS, "bin"], as_index=False, sort=False)["n"]
+        .groupby(["slot", *SEG_KEYS, "bin"], as_index=False, sort=False)["n"]
         .sum()
         for key, parts in bin_parts.items()
     }
@@ -568,7 +579,7 @@ def build() -> None:
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     months = sorted({month for month, _ in cell_slices})
-    hours = sorted({int(h) for frame in cell_slices.values() for h in frame["hour"].unique()})
+    slots = sorted({int(s) for frame in cell_slices.values() for s in frame["slot"].unique()})
     days_per_month: dict[str, int] = {}
     days_per_type: dict[str, int] = {ALL: len(days)}
     for day in days:
@@ -587,37 +598,35 @@ def build() -> None:
     file_count = 0
     for month in [*months, ALL]:
         for daytype in [*DAYTYPES, ALL]:
-            selection = _combine(cell_slices, month, daytype, ["hour", *CELL_KEYS])
-            bins = _combine(hist_slices, month, daytype, ["hour", *CELL_KEYS, "bin"])
-            for hour in [*hours, ALL]:
-                if hour == ALL:
+            selection = _combine(cell_slices, month, daytype, ["slot", *CELL_KEYS])
+            bins = _combine(hist_slices, month, daytype, ["slot", *CELL_KEYS, "bin"])
+            for slot in [*slots, ALL]:
+                if slot == ALL:
                     part, part_bins = selection, bins
                 else:
-                    part = selection[selection["hour"] == hour]
-                    part_bins = bins[bins["hour"] == hour]
-                hour_key = ALL if hour == ALL else f"{hour:02d}"
-                total_bytes += _write(
-                    f"{month}-{daytype}-{hour_key}", _payload(part, part_bins, ff)
-                )
+                    part = selection[selection["slot"] == slot]
+                    part_bins = bins[bins["slot"] == slot]
+                name = ALL if slot == ALL else slot_key(slot)
+                total_bytes += _write(f"{month}-{daytype}-{name}", _payload(part, part_bins, ff))
                 file_count += 1
-            total_bytes += _write(f"profile-{month}-{daytype}", _profile(selection, hours))
+            total_bytes += _write(f"profile-{month}-{daytype}", _profile(selection, slots))
             file_count += 1
             del selection, bins
 
             if leg_slices:
-                legs = _combine_rides(leg_slices, month, daytype, ["hour", *SEG_KEYS])
+                legs = _combine_rides(leg_slices, month, daytype, ["slot", *SEG_KEYS])
                 seg_bins = _combine_rides(
-                    seg_bin_slices, month, daytype, ["hour", *SEG_KEYS, "bin"]
+                    seg_bin_slices, month, daytype, ["slot", *SEG_KEYS, "bin"]
                 )
-                for hour in [*hours, ALL]:
-                    if hour == ALL:
+                for slot in [*slots, ALL]:
+                    if slot == ALL:
                         part, part_bins = legs, seg_bins
                     else:
-                        part = legs[legs["hour"] == hour]
-                        part_bins = seg_bins[seg_bins["hour"] == hour]
-                    hour_key = ALL if hour == ALL else f"{hour:02d}"
+                        part = legs[legs["slot"] == slot]
+                        part_bins = seg_bins[seg_bins["slot"] == slot]
+                    name = ALL if slot == ALL else slot_key(slot)
                     total_bytes += _write(
-                        f"rides-{month}-{daytype}-{hour_key}", _rides(part, part_bins, paths)
+                        f"rides-{month}-{daytype}-{name}", _rides(part, part_bins, paths)
                     )
                     file_count += 1
                 del legs, seg_bins
@@ -657,7 +666,12 @@ def build() -> None:
         },
         # Kept for viewers built before per-metric scales existed.
         "scale": {"low_kmh": SCALE_LOW_KMH, "high_kmh": SCALE_HIGH_KMH},
-        "hours": hours,
+        # The time axis: which half-hours were measured, and how wide one is.
+        # The viewer derives every label from these, so a change of bin width
+        # here moves the slider and the sparkline with it.
+        "slots": slots,
+        "slot_minutes": SLOT_MINUTES,
+        "slots_per_day": SLOTS_PER_DAY,
         "days": {"count": len(days), "first": days[0], "last": days[-1]},
         "samples": int(sum(int(f["n"].sum()) for f in cell_slices.values())),
         "months": [
@@ -681,7 +695,10 @@ def build() -> None:
         + (f", {swept} stale file(s) removed" if swept else "")
         + "\n"
         f"{len(days)} days ({days[0]} … {days[-1]}), "
-        f"{index['samples']:,} samples, months: {', '.join(months)}, "
+        f"{index['samples']:,} samples, "
+        f"{len(slots)} × {SLOT_MINUTES}-minute slots "
+        f"({slot_label(slots[0])} … {slot_label(slots[-1])}), "
+        f"months: {', '.join(months)}, "
         f"{days_per_type.get('wd', 0)} weekdays / {days_per_type.get('we', 0)} weekend days"
     )
 

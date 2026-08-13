@@ -22,9 +22,9 @@ WIDTH, HEIGHT = 1200, 630
 MARGIN = 28
 BACKGROUND = (14, 20, 28)
 DOT_RADIUS = 2
-# Weekday 08:00 — the busiest hour, and the most red/green contrast. Weekdays
-# rather than all days, since the weekend dilutes exactly what makes it a peak.
-SOURCE = "all-wd-08"
+# Weekday 08:00–08:29 — the busiest half-hour, and the most red/green contrast.
+# Weekdays rather than all days, since the weekend dilutes what makes it a peak.
+SOURCE = "all-wd-0800"
 
 # Same ramp as web/app.js.
 RAMP = ((0.0, (214, 40, 40)), (0.5, (240, 166, 32)), (1.0, (46, 158, 74)))

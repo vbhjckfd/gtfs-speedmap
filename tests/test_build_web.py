@@ -15,14 +15,14 @@ from speedmap.build_web import (
     daytype_of,
     free_flow,
 )
-from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES, SEG_MIN_OBS
+from speedmap.config import PROFILE_MIN_SAMPLES, PROFILE_MIN_SLOTS, SEG_MIN_OBS
 
 
 def bins(rows: list[tuple[int, int, int, int]]) -> pd.DataFrame:
     """rows of (cx, cy, bin, count)."""
     return pd.DataFrame(
         [("2026-07", 8, cx, cy, b, n) for cx, cy, b, n in rows],
-        columns=["month", "hour", "cx", "cy", "bin", "n"],
+        columns=["month", "slot", "cx", "cy", "bin", "n"],
     )
 
 
@@ -54,7 +54,7 @@ def test_medians_of_empty_histogram_is_empty():
 def test_payload_carries_both_statistics():
     cells = pd.DataFrame(
         [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        columns=["month", "slot", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
     # 10 samples: 8 slow, 2 fast — mean 9 km/h, median in the slow bin.
     payload = _payload(cells, bins([(0, 0, 2, 8), (0, 0, 37, 2)]))
@@ -69,7 +69,7 @@ def test_payload_without_histograms_still_builds():
     """Aggregates predating the histogram files must not break the build."""
     cells = pd.DataFrame(
         [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        columns=["month", "slot", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
     payload = _payload(cells, bins([]))
     assert payload["v"] == [pytest.approx(9.0)]
@@ -117,7 +117,7 @@ def test_percentiles_share_one_pass_with_the_single_shot_version():
 # --- free-flow reference and the relative metric --------------------------
 
 
-def test_free_flow_pools_every_hour_and_day_type():
+def test_free_flow_pools_every_slot_and_day_type():
     """The reference has to be global, or the colours shift as the slider moves."""
     slices = {
         ("2026-07", "wd"): bins([(0, 0, 10, 90)]).rename(columns={}),
@@ -140,7 +140,7 @@ def test_cells_below_the_free_flow_floor_get_no_ratio():
 def test_payload_rel_is_median_over_the_reference():
     cells = pd.DataFrame(
         [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        columns=["month", "slot", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
     reference = pd.Series([40.5], index=pd.MultiIndex.from_tuples([(0, 0)], names=["cx", "cy"]))
     payload = _payload(cells, bins([(0, 0, 20, 10)]), reference)
@@ -152,7 +152,7 @@ def test_payload_rel_is_median_over_the_reference():
 def test_payload_rel_is_null_without_a_reference():
     cells = pd.DataFrame(
         [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        columns=["month", "slot", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
     payload = _payload(cells, bins([(0, 0, 20, 10)]), pd.Series(dtype=float))
     assert payload["rel"] == [None]
@@ -166,41 +166,41 @@ def test_daytype_splits_the_week_at_saturday():
     assert [daytype_of(d) for d in ("2026-08-08", "2026-08-09")] == ["we", "we"]
 
 
-# --- hourly profile ------------------------------------------------------
+# --- profile through the day ---------------------------------------------
 
 
-def cells_by_hour(rows: list[tuple[int, int, int]]) -> pd.DataFrame:
-    """rows of (hour, n, speed_mps), all for one cell."""
+def cells_by_slot(rows: list[tuple[int, int, int]]) -> pd.DataFrame:
+    """rows of (slot, n, speed_mps), all for one cell."""
     return pd.DataFrame(
-        [(hour, 0, 0, n, speed * n, 49.84 * n, 24.03 * n) for hour, n, speed in rows],
-        columns=["hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        [(slot, 0, 0, n, speed * n, 49.84 * n, 24.03 * n) for slot, n, speed in rows],
+        columns=["slot", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
 
 
-def test_profile_reports_speed_per_hour():
-    hours = [5, 6, 7, 8, 9, 10]
-    rows = [(hour, 10, 5.0) for hour in hours]
-    rows[2] = (7, 10, 2.5)  # a slow hour
-    profile = _profile(cells_by_hour(rows), hours)
-    assert profile["q"] == [18, 18, 9, 18, 18, 18]
-    assert profile["hours"] == hours
+def test_profile_reports_speed_per_slot():
+    slots = list(range(10, 10 + PROFILE_MIN_SLOTS))  # from 05:00, half-hourly
+    rows = [(slot, 10, 5.0) for slot in slots]
+    rows[2] = (slots[2], 10, 2.5)  # a slow half-hour
+    profile = _profile(cells_by_slot(rows), slots)
+    assert profile["q"] == [18, 18, 9, *[18] * (PROFILE_MIN_SLOTS - 3)]
+    assert profile["slots"] == slots
 
 
-def test_profile_drops_cells_measured_in_too_few_hours():
+def test_profile_drops_cells_measured_in_too_few_slots():
     """A two-bar sparkline reads as 'no buses at 14:00', which is not what it means."""
-    hours = list(range(5, 5 + PROFILE_MIN_HOURS + 1))
-    thin = cells_by_hour([(hour, 10, 5.0) for hour in hours[: PROFILE_MIN_HOURS - 1]])
-    assert _profile(thin, hours)["lat"] == []
+    slots = list(range(10, 10 + PROFILE_MIN_SLOTS + 1))
+    thin = cells_by_slot([(slot, 10, 5.0) for slot in slots[: PROFILE_MIN_SLOTS - 1]])
+    assert _profile(thin, slots)["lat"] == []
 
-    thick = cells_by_hour([(hour, 10, 5.0) for hour in hours[:PROFILE_MIN_HOURS]])
-    assert len(_profile(thick, hours)["lat"]) == 1
+    thick = cells_by_slot([(slot, 10, 5.0) for slot in slots[:PROFILE_MIN_SLOTS]])
+    assert len(_profile(thick, slots)["lat"]) == 1
 
 
-def test_profile_marks_unmeasured_hours_rather_than_guessing():
-    hours = list(range(5, 5 + PROFILE_MIN_HOURS + 1))
-    rows = [(hour, 10, 5.0) for hour in hours]
-    rows[1] = (hours[1], PROFILE_MIN_SAMPLES - 1, 5.0)  # too thin to report
-    profile = _profile(cells_by_hour(rows), hours)
+def test_profile_marks_unmeasured_slots_rather_than_guessing():
+    slots = list(range(10, 10 + PROFILE_MIN_SLOTS + 1))
+    rows = [(slot, 10, 5.0) for slot in slots]
+    rows[1] = (slots[1], PROFILE_MIN_SAMPLES - 1, 5.0)  # too thin to report
+    profile = _profile(cells_by_slot(rows), slots)
     assert profile["q"][1] == profile["no_data"]
     assert profile["q"][0] == 18
 
@@ -214,7 +214,7 @@ def legs(rows: list[tuple[str, str, int, int]]) -> pd.DataFrame:
     """rows of (from_stop, to_stop, n, sum_s)."""
     return pd.DataFrame(
         [("2026-07", 8, "R1", "0", a, b, n, s) for a, b, n, s in rows],
-        columns=["month", "hour", "route_id", "direction", "from_stop", "to_stop", "n", "sum_s"],
+        columns=["month", "slot", "route_id", "direction", "from_stop", "to_stop", "n", "sum_s"],
     )
 
 
@@ -223,7 +223,7 @@ def leg_bins(rows: list[tuple[str, str, int, int]]) -> pd.DataFrame:
     return pd.DataFrame(
         [("2026-07", 8, "R1", "0", a, b, k, n) for a, b, k, n in rows],
         columns=[
-            "month", "hour", "route_id", "direction", "from_stop", "to_stop", "bin", "n",
+            "month", "slot", "route_id", "direction", "from_stop", "to_stop", "bin", "n",
         ],
     )
 
