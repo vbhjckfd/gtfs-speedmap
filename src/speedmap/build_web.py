@@ -288,6 +288,72 @@ def free_flow(hist_slices: dict) -> pd.Series:
     return reference[reference >= REL_MIN_FF_KMH]
 
 
+# --- folding the heading bins back into two directions of travel ----------
+#
+# Eight bins are how the samples are *counted*: fine enough that a bend inside
+# one square cannot mix the two sides of a street. They are not how a street
+# should be *drawn*. Where the road curves, one direction of travel sweeps
+# through three to five bins and emits an arrow for each, all at their own
+# sample-mean position inside the same square — measured at 17:00 city-wide,
+# 2.59 arrows per square and 23% of squares carrying four or more, which at
+# street zoom is a thicket rather than a road.
+#
+# So each square's bins are folded into at most two groups: the busiest bin
+# leads, everything within 90° of it travels with it, the rest travel against
+# it. 2.59 arrows per square becomes 1.46, and a curve's samples stop being
+# split five ways.
+#
+# The fold is a property of the square across the whole archive, never of one
+# selection. Derive it per payload and the 08:00 view would group its bins
+# differently from the all-hours view, and neither would line up with the
+# free-flow reference, which is global by construction.
+_GROUPS: dict[tuple[int, int, int], int] | None = None
+
+
+def install_groups(cell_slices: dict) -> tuple[int, int, int]:
+    """Decide, once, which group each (square, heading bin) belongs to."""
+    global _GROUPS
+    universe = (
+        pd.concat(cell_slices.values(), ignore_index=True)
+        .groupby(CELL_KEYS, as_index=False, sort=False)[["n", "sum_sin", "sum_cos"]]
+        .sum()
+    )
+    universe["bearing"] = np.degrees(np.arctan2(universe["sum_sin"], universe["sum_cos"])) % 360
+    # The busiest bin of each square is the one whose heading the rest are
+    # judged against — a lane with ten times the traffic of the turn beside it
+    # is the direction that square is really about.
+    lead = universe.sort_values("n").groupby(PLACE_KEYS)["bearing"].last()
+    against = universe.join(lead.rename("lead"), on=PLACE_KEYS)
+    offset = (against["bearing"] - against["lead"]).abs() % 360
+    apart = np.minimum(offset, 360 - offset)
+    _GROUPS = {
+        (cx, cy, direction): int(flip)
+        for cx, cy, direction, flip in zip(
+            against["cx"], against["cy"], against["dir"], apart > 90
+        )
+    }
+    folded = {(cx, cy, group) for (cx, cy, _bin), group in _GROUPS.items()}
+    return len(_GROUPS), len(lead), len(folded)
+
+
+def regroup(frame: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    """Rewrite `dir` from heading bin to group, and sum what that merges.
+
+    Every frame the build touches goes through here — cells, speed histograms
+    and the hourly profile alike — so a figure and the arrow drawn for it are
+    always the same set of samples.
+    """
+    if _GROUPS is None or frame.empty:
+        return frame
+    columns = ["n"] if "bin" in frame.columns else CELL_SUMS
+    frame = frame.copy()
+    frame["dir"] = [
+        _GROUPS.get((cx, cy, direction), 0)
+        for cx, cy, direction in zip(frame["cx"], frame["cy"], frame["dir"])
+    ]
+    return frame.groupby(keys, as_index=False, sort=False)[columns].sum()
+
+
 _ZONES: list[tuple[float, float, float]] | None = None
 
 
@@ -605,6 +671,21 @@ def build() -> None:
         days_per_month[day[:7]] = days_per_month.get(day[:7], 0) + 1
         kind = daytype_of(day)
         days_per_type[kind] = days_per_type.get(kind, 0) + 1
+
+    # Fold the heading bins down before anything is derived from them, so the
+    # arrows, the percentiles and the free-flow reference are all folded the
+    # same way.
+    binned, squares, folded = install_groups(cell_slices)
+    cell_slices = {
+        key: regroup(frame, ["hour", *CELL_KEYS]) for key, frame in cell_slices.items()
+    }
+    hist_slices = {
+        key: regroup(frame, ["hour", *CELL_KEYS, "bin"]) for key, frame in hist_slices.items()
+    }
+    print(
+        f"{binned:,} heading bins over {squares:,} squares folded into {folded:,} "
+        f"directions of travel ({folded / squares:.2f} per square)"
+    )
 
     masked = install_mask(cell_slices)
     ff = free_flow(hist_slices)

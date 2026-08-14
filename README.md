@@ -68,10 +68,22 @@ way: the histograms, the percentiles, each cell's free-flow reference and the ho
 the popup sparkline. Cell rows grow ×1.5, not ×2 — `MIN_SAMPLES` prunes the thin bins a curve throws
 off.
 
+Eight bins are how the samples are *counted*, not how a street is *drawn*. Where the road bends, one
+direction of travel sweeps through three to five bins and would emit an arrow for each — measured at
+17:00, 2.59 arrows per square and 23% of squares carrying four or more, which at street zoom is a
+thicket rather than a road. So `build_web.py` folds each square's bins into at most two groups: the
+busiest bin leads, everything within 90° of it travels with it, the rest travel against it. That
+gives **1.55 directions per square**, and a curve's samples stop being split five ways. The fold is
+derived from the whole archive and never from one selection — do it per payload and the 08:00 view
+would group its bins differently from the all-hours view, and neither would line up with the global
+free-flow reference. A genuine three-way junction cell loses its turning traffic into one of the two
+groups; at 25 m that is rare, and the alternative is the thicket.
+
 The viewer draws each one as an arrow pointing the way its traffic went, nudged half a cell to the
 right of its own heading so the two directions lie side by side as the lanes do, and a click picks
 the arrow it landed on rather than the nearest cell centre. Below 3 px an arrowhead is a smudge, so
-zoomed-out views keep the old dots.
+zoomed-out views keep the old dots; above `ARROW_MAX_PX` it stops growing, since at zoom 19 a cell
+is 130 px across and an arrow drawn at its true ground size runs 117 px and swallows its neighbours.
 
 ## Finding the depots
 

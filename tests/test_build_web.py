@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from speedmap.build_web import (
+    CELL_KEYS,
     CELL_SUMS,
     _medians,
     _payload,
@@ -17,6 +18,8 @@ from speedmap.build_web import (
     _rides,
     daytype_of,
     free_flow,
+    install_groups,
+    regroup,
 )
 from speedmap.grid import heading_bin
 from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES, SEG_MIN_OBS
@@ -298,3 +301,66 @@ def test_the_two_directions_of_one_square_keep_their_own_figures():
     assert payload["dir"] == [0, 180]
     assert payload["v"] == [pytest.approx(7.2), pytest.approx(36.0)]
     assert payload["lat"] == [pytest.approx(49.84), pytest.approx(49.84)]
+
+
+# --- folding the heading bins into directions of travel -------------------
+
+
+def bins_of(*rows) -> pd.DataFrame:
+    """rows of (cx, cy, heading_bin, n) as a cell frame, one hour."""
+    return pd.concat(
+        [
+            pd.DataFrame(
+                [("2026-07", 8, cx, cy, b, n, 8.0 * n, 49.84 * n, 24.03 * n,
+                  n * math.sin(math.radians(b * 45)), n * math.cos(math.radians(b * 45)))],
+                columns=["month", "hour", "cx", "cy", "dir", *CELL_SUMS],
+            )
+            for cx, cy, b, n in rows
+        ],
+        ignore_index=True,
+    )
+
+
+def test_a_bend_collapses_into_the_direction_it_is_going():
+    """N, NE and E in one square are one street curving, not three streets."""
+    frame = bins_of((0, 0, 0, 40), (0, 0, 1, 30), (0, 0, 2, 10), (0, 0, 4, 25))
+    binned, squares, folded = install_groups({("2026-07", "wd"): frame})
+    assert (binned, squares, folded) == (4, 1, 2)
+
+    out = regroup(frame, ["hour", *CELL_KEYS])
+    assert len(out) == 2, "one row for the way there, one for the way back"
+    # The busiest bin leads, so the three bins within 90° of north merge; only
+    # the southbound one is left to travel against it.
+    by_group = dict(zip(out["dir"], out["n"]))
+    assert by_group == {0: 80, 1: 25}
+
+
+def test_the_fold_is_the_same_for_every_selection():
+    """Derived per payload, 08:00 would group its bins differently from all-day."""
+    universe = bins_of((0, 0, 0, 40), (0, 0, 2, 10), (0, 0, 4, 25))
+    install_groups({("2026-07", "wd"): universe})
+    # An hour in which the southbound lane happens to be the busier one still
+    # folds the same way, or its arrow would not match the free-flow reference.
+    quiet_hour = bins_of((0, 0, 2, 1), (0, 0, 4, 50))
+    out = regroup(quiet_hour, ["hour", *CELL_KEYS])
+    assert dict(zip(out["dir"], out["n"])) == {0: 1, 1: 50}
+
+
+def test_folding_leaves_a_one_way_square_alone():
+    frame = bins_of((0, 0, 3, 20), (0, 0, 4, 5))
+    install_groups({("2026-07", "wd"): frame})
+    out = regroup(frame, ["hour", *CELL_KEYS])
+    assert len(out) == 1
+    assert out["n"].tolist() == [25]
+
+
+def test_folded_histograms_follow_the_cells():
+    """A percentile has to be read off the same samples the arrow was drawn from."""
+    install_groups({("2026-07", "wd"): bins_of((0, 0, 0, 40), (0, 0, 1, 30))})
+    hist = pd.DataFrame(
+        [("2026-07", 8, 0, 0, 0, 20, 3), ("2026-07", 8, 0, 0, 1, 20, 7)],
+        columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
+    )
+    out = regroup(hist, ["hour", *CELL_KEYS, "bin"])
+    assert len(out) == 1
+    assert out["n"].tolist() == [10]

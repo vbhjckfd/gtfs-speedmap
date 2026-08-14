@@ -13,6 +13,11 @@ const DOT_MIN_PX = 2.0;
 // at zoom 13 a 25 m cell is under two pixels across and no shape drawn in it
 // could carry a direction anyway.
 const ARROW_MIN_PX = 3.0;
+// And an upper bound, which the ground size alone does not give: at zoom 19 a
+// 25 m cell is 130 px across, so an arrow drawn at its true size runs 117 px
+// and swallows its neighbours. Past this the mark stops growing and the map
+// gains white space between cells instead — which is what zooming in is for.
+const ARROW_MAX_PX = 16.0;
 // Right-hand traffic. Each arrow is nudged to the right of its own heading so
 // the two directions of a street lie side by side, as the lanes do, rather than
 // on top of each other — their measured mean positions differ by less than the
@@ -170,7 +175,8 @@ const DotLayer = L.Layer.extend({
   // A cell is `cell_size_m` across; draw it at its true ground size so marks
   // merge into corridors when zoomed out and separate when zoomed in.
   _radiusPx() {
-    return Math.max(DOT_MIN_PX, index.cell_size_m / metresPerPixel() / 2);
+    const ground = index.cell_size_m / metresPerPixel() / 2;
+    return Math.min(ARROW_MAX_PX, Math.max(DOT_MIN_PX, ground));
   },
 
   redraw() {
