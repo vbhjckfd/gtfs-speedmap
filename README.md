@@ -1,8 +1,9 @@
 # gtfs-speedmap
 
-An OSM map of **bus running speed** in Lviv, one dot per 25 m cell, coloured green (fast) to red
-(slow), with an hour-of-day slider, a month picker and a weekday/weekend split — and a ruler that
-answers the other question, **how long the ride takes**, from the buses' own stop-to-stop times.
+An OSM map of **bus running speed** in Lviv, one arrow per 25 m cell **per direction of travel**,
+coloured green (fast) to red (slow), with an hour-of-day slider, a month picker and a
+weekday/weekend split — and a ruler that answers the other question, **how long the ride takes**,
+from the buses' own stop-to-stop times.
 
 Built from the GTFS-RT vehicle-position snapshots that
 [`gtfs-collector`](../gtfs-collector) archives to Cloudflare R2.
@@ -13,7 +14,8 @@ R2  static/YYYY-MM-DD/static.zip  GTFS schedule as archived that day
         │  python -m speedmap.aggregate --all   │  python -m speedmap.segments --all
         ▼                                       ▼
 data/agg/YYYY-MM-DD.parquet                 data/seg/YYYY-MM-DD.parquet
-  per-day sums, keyed (month, hour, cell)     stop-to-stop times, keyed (…, route, stop pair)
+  per-day sums, keyed                         stop-to-stop times, keyed (…, route, stop pair)
+  (month, hour, cell, heading)
 data/hist/YYYY-MM-DD.parquet                data/seghist/YYYY-MM-DD.parquet
   per-day speed histograms, same key + bin    leg-time histograms, same key + bin
         │  python -m speedmap.sync push     ⇄  R2 derived/{agg,hist}/
@@ -48,6 +50,28 @@ median of 70 m apart, so the stop across the street never blanks out the lane ru
 
 Speed is `position.speed` straight from the feed (m/s), which the Lviv feed populates on every
 entity.
+
+## Which way the bus was going
+
+A cell is a 25 m square *and* a heading, because both directions of a street fall inside one square
+and they are not the same road to ride on. Measured over a day of raw positions, the circular
+resultant of the headings in a cell has a median of **0.50** — half of all cells have no single
+direction at all until they are split. What that averaging hid: at 08:00 the two directions of one
+square differ by a median of **6 km/h**, 28% of them by more than 10, and the worst by 8.8 against
+28.5 km/h. That is the approach to a junction against the run out of it, and one number for both
+describes neither.
+
+`position.bearing` is on every entity the feed publishes a speed for, so the key gains `dir`, one of
+`HEADING_BINS` bins centred on their compass point — 8 bins of 45°, which is the coarsest split that
+still keeps the two sides of a street apart after it bends. Everything downstream is keyed the same
+way: the histograms, the percentiles, each cell's free-flow reference and the hourly profile behind
+the popup sparkline. Cell rows grow ×1.5, not ×2 — `MIN_SAMPLES` prunes the thin bins a curve throws
+off.
+
+The viewer draws each one as an arrow pointing the way its traffic went, nudged half a cell to the
+right of its own heading so the two directions lie side by side as the lanes do, and a click picks
+the arrow it landed on rather than the nearest cell centre. Below 3 px an arrowhead is a smudge, so
+zoomed-out views keep the old dots.
 
 ## Finding the depots
 
@@ -315,7 +339,8 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 
 | Setting | Default | Effect |
 |---|---|---|
-| `CELL_SIZE_M` | 25 | Dot spacing. Smaller = finer, more cells, bigger JSON. |
+| `CELL_SIZE_M` | 25 | Arrow spacing. Smaller = finer, more cells, bigger JSON. |
+| `HEADING_BINS` | 8 | Directions of travel a cell is split into. Fewer mixes the two sides of a street; more fragments the samples. |
 | `STOP_RADIUS_M` | 40 | How much road either side of a stop is treated as dwell. |
 | `TERMINAL_RADIUS_M` | 120 | The same, for the first and last stop of a trip. |
 | `STALE_MAX_S` | 120 | Ghost-entity cutoff. |

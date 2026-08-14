@@ -1,7 +1,11 @@
 """Aggregate one day of archived snapshots into per-cell average bus speed.
 
-Output: data/agg/YYYY-MM-DD.parquet, keyed by (month, hour, cx, cy) with
+Output: data/agg/YYYY-MM-DD.parquet, keyed by (month, hour, cx, cy, dir) with
 running sums, so days can be merged later without revisiting R2.
+
+`dir` is the heading bin: a cell holds both directions of its street, and the
+approach to a junction and the departure from it are nowhere near the same
+speed, so the two are counted apart.
 
 Run:
     python -m speedmap.aggregate 2026-07-15
@@ -11,6 +15,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from collections import Counter, defaultdict
@@ -33,7 +38,7 @@ from .config import (
     WORKERS,
 )
 from .depots import load_sites
-from .grid import cell_of, in_bbox, near_trip_stop, project
+from .grid import cell_of, heading_bin, in_bbox, near_trip_stop, project
 from .snapshots import VehicleRow, parse_feed
 from .static_feed import StaticFeed, load_for_date
 from .utm import project_xy
@@ -41,7 +46,9 @@ from .utm import project_xy
 _LOCAL_TZ = ZoneInfo(TZ)
 MPS_TO_KMH = 3.6
 
-# Accumulator layout: [n, sum_speed_mps, sum_lat, sum_lon]
+# Accumulator layout: [n, sum_speed_mps, sum_lat, sum_lon, sum_sin, sum_cos]
+# The last two are the bearing as a unit vector, summed. Averaging degrees
+# directly is wrong across the 359°/0° seam; the vector sum is not.
 Cell = list
 
 
@@ -149,15 +156,19 @@ def accumulate(
 
         local = datetime.fromtimestamp(row.veh_ts, tz=timezone.utc).astimezone(_LOCAL_TZ)
         cx, cy = cell_of(x, y)
-        key = (local.strftime("%Y-%m"), local.hour, cx, cy)
+        radians = math.radians(row.bearing)
+        sin_b, cos_b = math.sin(radians), math.cos(radians)
+        key = (local.strftime("%Y-%m"), local.hour, cx, cy, heading_bin(row.bearing))
         bucket = acc.get(key)
         if bucket is None:
-            acc[key] = [1, speed, lat, lon]
+            acc[key] = [1, speed, lat, lon, sin_b, cos_b]
         else:
             bucket[0] += 1
             bucket[1] += speed
             bucket[2] += lat
             bucket[3] += lon
+            bucket[4] += sin_b
+            bucket[5] += cos_b
 
         if hist is not None:
             bin_index = int(speed * MPS_TO_KMH / HIST_BIN_KMH)
@@ -195,15 +206,24 @@ def aggregate_day(
             accumulate(rows, feed, acc, seen, stats, zones, hist)
 
     cells = pd.DataFrame(
-        [
-            (month, hour, cx, cy, n, s_speed, s_lat, s_lon)
-            for (month, hour, cx, cy), (n, s_speed, s_lat, s_lon) in acc.items()
+        [(*key, *sums) for key, sums in acc.items()],
+        columns=[
+            "month",
+            "hour",
+            "cx",
+            "cy",
+            "dir",
+            "n",
+            "sum_speed",
+            "sum_lat",
+            "sum_lon",
+            "sum_sin",
+            "sum_cos",
         ],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
     )
     bins = pd.DataFrame(
-        [(month, hour, cx, cy, b, n) for (month, hour, cx, cy, b), n in hist.items()],
-        columns=["month", "hour", "cx", "cy", "bin", "n"],
+        [(*key, n) for key, n in hist.items()],
+        columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
     )
     return cells, bins, stats
 

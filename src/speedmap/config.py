@@ -21,6 +21,19 @@ def _float(name: str, default: float) -> float:
 # Grid cell edge in metres (UTM 35N eastings/northings).
 CELL_SIZE_M = _float("CELL_SIZE_M", 25.0)
 
+# A cell is binned by heading as well as position, because both directions of a
+# street fall inside one 25 m cell and they are different roads to ride on: an
+# approach to a junction queues while the departure from it runs free, and
+# averaging the two hides both. Measured over a day of raw positions, half of
+# all cells have a circular resultant below 0.5 — that is, no single direction
+# at all until they are split.
+#
+# 8 bins of 45° is the coarsest split that still separates the two sides of a
+# street after it bends: the two directions differ by 180°, four bins apart, so
+# a curve has to turn more than 22.5° within one cell before the halves start
+# to mix. Finer bins would fragment the samples behind each figure for no gain.
+HEADING_BINS = _int("HEADING_BINS", 8)
+
 # A position within this distance of a stop *on its own trip* is dropped, so the
 # map shows running speed rather than dwell time.
 STOP_RADIUS_M = _float("STOP_RADIUS_M", 40.0)

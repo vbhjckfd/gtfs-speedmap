@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 import pytest
 
 from speedmap.build_web import (
+    CELL_SUMS,
     _medians,
     _payload,
     _percentile,
@@ -15,36 +18,49 @@ from speedmap.build_web import (
     daytype_of,
     free_flow,
 )
+from speedmap.grid import heading_bin
 from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES, SEG_MIN_OBS
 
 
 def bins(rows: list[tuple[int, int, int, int]]) -> pd.DataFrame:
-    """rows of (cx, cy, bin, count)."""
+    """rows of (cx, cy, bin, count), all in heading bin 0."""
     return pd.DataFrame(
-        [("2026-07", 8, cx, cy, b, n) for cx, cy, b, n in rows],
-        columns=["month", "hour", "cx", "cy", "bin", "n"],
+        [("2026-07", 8, cx, cy, 0, b, n) for cx, cy, b, n in rows],
+        columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
+    )
+
+
+def cells(rows: list[tuple], heading: float = 0.0) -> pd.DataFrame:
+    """rows of (cx, cy, n, sum_speed, sum_lat, sum_lon), all one heading."""
+    sin_b, cos_b = math.sin(math.radians(heading)), math.cos(math.radians(heading))
+    return pd.DataFrame(
+        [
+            ("2026-07", 8, cx, cy, heading_bin(heading), n, speed, lat, lon, sin_b * n, cos_b * n)
+            for cx, cy, n, speed, lat, lon in rows
+        ],
+        columns=["month", "hour", "cx", "cy", "dir", *CELL_SUMS],
     )
 
 
 def test_median_is_the_bin_holding_the_middle_sample():
     # Speeds: 2 at 10 km/h, 1 at 30, 2 at 50 → middle sample sits in bin 30.
     result = _medians(bins([(0, 0, 10, 2), (0, 0, 30, 1), (0, 0, 50, 2)]))
-    assert result.loc[(0, 0)] == pytest.approx(30.5)
+    assert result.loc[(0, 0, 0)] == pytest.approx(30.5)
 
 
 def test_median_ignores_a_long_slow_tail_that_drags_the_mean():
     # 9 samples at 30 km/h, 21 stuck at 0: mean 9 km/h, median 0.
     result = _medians(bins([(1, 1, 30, 9), (1, 1, 0, 21)]))
-    assert result.loc[(1, 1)] == pytest.approx(0.5)
+    assert result.loc[(1, 1, 0)] == pytest.approx(0.5)
 
     # Flip the balance and the median follows the bulk, not the outliers.
     result = _medians(bins([(1, 1, 30, 21), (1, 1, 0, 9)]))
-    assert result.loc[(1, 1)] == pytest.approx(30.5)
+    assert result.loc[(1, 1, 0)] == pytest.approx(30.5)
 
 
 def test_median_with_even_sample_count_picks_the_lower_middle():
     result = _medians(bins([(2, 2, 10, 1), (2, 2, 20, 1)]))
-    assert result.loc[(2, 2)] == pytest.approx(10.5)
+    assert result.loc[(2, 2, 0)] == pytest.approx(10.5)
 
 
 def test_medians_of_empty_histogram_is_empty():
@@ -52,12 +68,9 @@ def test_medians_of_empty_histogram_is_empty():
 
 
 def test_payload_carries_both_statistics():
-    cells = pd.DataFrame(
-        [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
-    )
+    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
     # 10 samples: 8 slow, 2 fast — mean 9 km/h, median in the slow bin.
-    payload = _payload(cells, bins([(0, 0, 2, 8), (0, 0, 37, 2)]))
+    payload = _payload(frame, bins([(0, 0, 2, 8), (0, 0, 37, 2)]))
 
     assert payload["v"] == [pytest.approx(9.0)]  # 25 m/s summed over 10 → 2.5 m/s
     assert payload["med"] == [pytest.approx(2.5)]
@@ -67,11 +80,8 @@ def test_payload_carries_both_statistics():
 
 def test_payload_without_histograms_still_builds():
     """Aggregates predating the histogram files must not break the build."""
-    cells = pd.DataFrame(
-        [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
-    )
-    payload = _payload(cells, bins([]))
+    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
+    payload = _payload(frame, bins([]))
     assert payload["v"] == [pytest.approx(9.0)]
     assert payload["med"] == [None]
 
@@ -85,26 +95,26 @@ def test_percentiles_bracket_the_distribution():
     # 85th has already crossed into the fast one.
     b = bins([(0, 0, 5, 20), (0, 0, 20, 60), (0, 0, 40, 20)])
     q = _percentiles(b, (0.15, 0.5, 0.85))
-    assert q[0.15].loc[(0, 0)] == pytest.approx(5.5)
-    assert q[0.5].loc[(0, 0)] == pytest.approx(20.5)
-    assert q[0.85].loc[(0, 0)] == pytest.approx(40.5)
+    assert q[0.15].loc[(0, 0, 0)] == pytest.approx(5.5)
+    assert q[0.5].loc[(0, 0, 0)] == pytest.approx(20.5)
+    assert q[0.85].loc[(0, 0, 0)] == pytest.approx(40.5)
 
     # Shrink the fast tail and the 85th falls back into the middle bin:
     # cumulative 20 / 80 of 85, and the 73rd sample is where it lands.
     b = bins([(0, 0, 5, 20), (0, 0, 20, 60), (0, 0, 40, 5)])
-    assert _percentile(b, 0.85).loc[(0, 0)] == pytest.approx(20.5)
+    assert _percentile(b, 0.85).loc[(0, 0, 0)] == pytest.approx(20.5)
 
 
 def test_percentile_never_falls_off_the_bottom():
     """A tiny q must still land on the first bin, not on nothing."""
     b = bins([(0, 0, 12, 1), (0, 0, 30, 1)])
-    assert _percentile(b, 0.01).loc[(0, 0)] == pytest.approx(12.5)
+    assert _percentile(b, 0.01).loc[(0, 0, 0)] == pytest.approx(12.5)
 
 
 def test_percentile_of_a_single_bin_is_that_bin():
     b = bins([(3, 3, 7, 40)])
     for q in (0.15, 0.5, 0.85):
-        assert _percentile(b, q).loc[(3, 3)] == pytest.approx(7.5)
+        assert _percentile(b, q).loc[(3, 3, 0)] == pytest.approx(7.5)
 
 
 def test_percentiles_share_one_pass_with_the_single_shot_version():
@@ -126,35 +136,31 @@ def test_free_flow_pools_every_hour_and_day_type():
     reference = free_flow(slices)
     # 100 samples pooled: the 85th sits in the slow bin, which one slice alone
     # would never have said.
-    assert reference.loc[(0, 0)] == pytest.approx(10.5)
+    assert reference.loc[(0, 0, 0)] == pytest.approx(10.5)
 
 
 def test_cells_below_the_free_flow_floor_get_no_ratio():
     """A ratio against a 4 km/h reference is noise over noise."""
     slices = {("2026-07", "wd"): bins([(0, 0, 4, 50), (1, 1, 30, 50)])}
     reference = free_flow(slices)
-    assert (0, 0) not in reference.index
-    assert reference.loc[(1, 1)] == pytest.approx(30.5)
+    assert (0, 0, 0) not in reference.index
+    assert reference.loc[(1, 1, 0)] == pytest.approx(30.5)
 
 
 def test_payload_rel_is_median_over_the_reference():
-    cells = pd.DataFrame(
-        [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
+    reference = pd.Series(
+        [40.5], index=pd.MultiIndex.from_tuples([(0, 0, 0)], names=["cx", "cy", "dir"])
     )
-    reference = pd.Series([40.5], index=pd.MultiIndex.from_tuples([(0, 0)], names=["cx", "cy"]))
-    payload = _payload(cells, bins([(0, 0, 20, 10)]), reference)
+    payload = _payload(frame, bins([(0, 0, 20, 10)]), reference)
     assert payload["med"] == [pytest.approx(20.5)]
     assert payload["rel"] == [pytest.approx(round(20.5 / 40.5, 2))]
     assert payload["spread"] == [pytest.approx(0.0)]
 
 
 def test_payload_rel_is_null_without_a_reference():
-    cells = pd.DataFrame(
-        [("2026-07", 8, 0, 0, 10, 25.0, 498.4, 240.3)],
-        columns=["month", "hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
-    )
-    payload = _payload(cells, bins([(0, 0, 20, 10)]), pd.Series(dtype=float))
+    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
+    payload = _payload(frame, bins([(0, 0, 20, 10)]), pd.Series(dtype=float))
     assert payload["rel"] == [None]
 
 
@@ -172,8 +178,8 @@ def test_daytype_splits_the_week_at_saturday():
 def cells_by_hour(rows: list[tuple[int, int, int]]) -> pd.DataFrame:
     """rows of (hour, n, speed_mps), all for one cell."""
     return pd.DataFrame(
-        [(hour, 0, 0, n, speed * n, 49.84 * n, 24.03 * n) for hour, n, speed in rows],
-        columns=["hour", "cx", "cy", "n", "sum_speed", "sum_lat", "sum_lon"],
+        [(hour, 0, 0, 0, n, speed * n, 49.84 * n, 24.03 * n, 0.0, float(n)) for hour, n, speed in rows],
+        columns=["hour", "cx", "cy", "dir", *CELL_SUMS],
     )
 
 
@@ -260,3 +266,35 @@ def test_a_route_nobody_was_seen_on_is_left_out():
 
 def test_rides_of_nothing_is_nothing():
     assert _rides(legs([]), leg_bins([]), RIDE_PATHS) == {}
+
+
+# --- direction of travel --------------------------------------------------
+
+
+def test_payload_reports_the_heading_of_its_traffic():
+    payload = _payload(cells([(0, 0, 10, 25.0, 498.4, 240.3)], heading=90.0), bins([]))
+    assert payload["dir"] == [90]
+
+
+def test_mean_heading_survives_the_north_seam():
+    """Averaging 350° and 10° in degrees gives due south; as vectors, due north."""
+    frame = pd.DataFrame(
+        [
+            ("2026-07", 8, 0, 0, 0, 5, 40.0, 249.2, 120.15, 5 * math.sin(math.radians(a)),
+             5 * math.cos(math.radians(a)))
+            for a in (350.0, 10.0)
+        ],
+        columns=["month", "hour", "cx", "cy", "dir", *CELL_SUMS],
+    )
+    assert _payload(frame, bins([]))["dir"] == [0]
+
+
+def test_the_two_directions_of_one_square_keep_their_own_figures():
+    """The whole point of the split: one square, two speeds, two arrows."""
+    north = cells([(0, 0, 10, 20.0, 498.4, 240.3)], heading=0.0)
+    south = cells([(0, 0, 10, 100.0, 498.4, 240.3)], heading=180.0)
+    payload = _payload(pd.concat([north, south], ignore_index=True), bins([]))
+
+    assert payload["dir"] == [0, 180]
+    assert payload["v"] == [pytest.approx(7.2), pytest.approx(36.0)]
+    assert payload["lat"] == [pytest.approx(49.84), pytest.approx(49.84)]

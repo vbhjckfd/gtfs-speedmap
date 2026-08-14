@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .config import BBOX, CELL_SIZE_M, STOP_BUCKET_M, STOP_RADIUS_M
+from .config import BBOX, CELL_SIZE_M, HEADING_BINS, STOP_BUCKET_M, STOP_RADIUS_M
 from .static_feed import StaticFeed
 from .utm import project_xy
 
@@ -28,6 +28,17 @@ def in_bbox(lat: float, lon: float) -> bool:
 
 def cell_of(x: float, y: float, cell_size: float = CELL_SIZE_M) -> tuple[int, int]:
     return int(x // cell_size), int(y // cell_size)
+
+
+def heading_bin(bearing: float, bins: int = HEADING_BINS) -> int:
+    """Which heading bin a bearing in degrees falls in, 0 = north, clockwise.
+
+    Bins are centred on their heading rather than starting at it, so bin 0 is
+    due north give or take half a bin instead of north-to-north-east — the
+    labels a reader expects of a compass.
+    """
+    width = 360.0 / bins
+    return int((bearing % 360.0 + width / 2) // width) % bins
 
 
 def near_trip_stop(

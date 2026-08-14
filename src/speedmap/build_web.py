@@ -34,6 +34,7 @@ from .config import (
     AGG_DIR,
     CELL_SIZE_M,
     FREE_FLOW_Q,
+    HEADING_BINS,
     HIST_BIN_KMH,
     HIST_DIR,
     MIN_SAMPLES,
@@ -83,8 +84,13 @@ MONTH_NAMES = (
     "December",
 )
 
-CELL_KEYS = ["cx", "cy"]
-CELL_SUMS = ["n", "sum_speed", "sum_lat", "sum_lon"]
+# A cell is a place *and* a direction of travel: the two sides of a street share
+# a 25 m square, and the queue into a junction has nothing to do with the run
+# out of it. Everything downstream — percentiles, free-flow, the hourly profile
+# — is keyed the same way, so a figure never mixes the two.
+CELL_KEYS = ["cx", "cy", "dir"]
+PLACE_KEYS = ["cx", "cy"]
+CELL_SUMS = ["n", "sum_speed", "sum_lat", "sum_lon", "sum_sin", "sum_cos"]
 
 # Each metric needs its own colour domain and formatting: km/h, a ratio and a
 # spread cannot share one scale. `invert` flips the ramp for metrics where the
@@ -162,6 +168,11 @@ def load_base_slices() -> tuple[dict, dict, list[str]]:
     for path in paths:
         day = path.stem
         cells = pd.read_parquet(path)
+        if "dir" not in cells.columns:
+            raise SystemExit(
+                f"{path} predates the direction split — re-run "
+                "`python -m speedmap.aggregate --all --force`"
+            )
         hist_path = HIST_DIR / path.name
         hist = pd.read_parquet(hist_path) if hist_path.exists() else None
         # A day file is almost entirely one month, but the local-time
@@ -321,11 +332,16 @@ _MASKED_IDS: set[tuple[int, int]] | None = None
 
 
 def install_mask(cell_slices: dict) -> int:
-    """Precompute the masked cell ids from every cell the build will ever emit."""
+    """Precompute the masked cell ids from every cell the build will ever emit.
+
+    Keyed by place alone: a depot swallows every heading through it, and the
+    directions of one square would otherwise each be tested at their own
+    slightly different mean position.
+    """
     global _MASKED_IDS
     universe = (
         pd.concat(cell_slices.values(), ignore_index=True)
-        .groupby(CELL_KEYS, as_index=False, sort=False)[CELL_SUMS]
+        .groupby(PLACE_KEYS, as_index=False, sort=False)[CELL_SUMS]
         .sum()
     )
     universe["lat"] = universe["sum_lat"] / universe["n"]
@@ -346,6 +362,10 @@ def _cells_of(group: pd.DataFrame) -> pd.DataFrame:
         return cells
     cells["lat"] = cells["sum_lat"] / cells["n"]
     cells["lon"] = cells["sum_lon"] / cells["n"]
+    # Degrees clockwise from north, recovered from the summed unit vectors so
+    # the mean survives the 359°/0° seam. Within one bin the samples span 45°
+    # at most, so this is the heading of the traffic, not of the bin.
+    cells["bearing"] = np.degrees(np.arctan2(cells["sum_sin"], cells["sum_cos"])) % 360
     if _MASKED_IDS is None:
         keep = ~_masked_cells(cells)
     else:
@@ -369,7 +389,9 @@ def _round(values: np.ndarray, decimals: int) -> list:
     return [None if np.isnan(v) else float(v) for v in rounded]
 
 
-EMPTY_PAYLOAD = {k: [] for k in ("lat", "lon", "v", "med", "p15", "p85", "spread", "rel", "n")}
+EMPTY_PAYLOAD = {
+    k: [] for k in ("lat", "lon", "dir", "v", "med", "p15", "p85", "spread", "rel", "n")
+}
 
 
 def _payload(group: pd.DataFrame, bins: pd.DataFrame, ff: pd.Series | None = None) -> dict:
@@ -389,6 +411,10 @@ def _payload(group: pd.DataFrame, bins: pd.DataFrame, ff: pd.Series | None = Non
     return {
         "lat": cells["lat"].to_numpy().round(5).tolist(),
         "lon": cells["lon"].to_numpy().round(5).tolist(),
+        # Whole degrees, and 360 rounds back to 0 — a heading a hair short of
+        # north is north. The arrow drawn from this is a few pixels long, so a
+        # decimal place on it would cost bytes the map cannot show.
+        "dir": (cells["bearing"].to_numpy().round().astype(int) % 360).tolist(),
         "v": (cells["sum_speed"].to_numpy() / n * MPS_TO_KMH).round(1).tolist(),
         "med": _round(median, 1),
         "p15": _round(p15, 1),
@@ -408,7 +434,7 @@ def _profile(group: pd.DataFrame, hours: list[int]) -> dict:
     """
     cells = _cells_of(group)
     if cells.empty:
-        return {"lat": [], "lon": [], "hours": hours, "q": [], "no_data": NO_DATA}
+        return {"lat": [], "lon": [], "dir": [], "hours": hours, "q": [], "no_data": NO_DATA}
 
     index = pd.MultiIndex.from_frame(cells[CELL_KEYS])
     by_hour = group.groupby(["hour", *CELL_KEYS], sort=False)[["n", "sum_speed"]].sum()
@@ -435,6 +461,10 @@ def _profile(group: pd.DataFrame, hours: list[int]) -> dict:
     return {
         "lat": cells["lat"].to_numpy().round(5).tolist(),
         "lon": cells["lon"].to_numpy().round(5).tolist(),
+        # The two directions of a street sit a lane apart at most, closer than
+        # the viewer can tell by position, so the heading is what picks the
+        # right one of them out of this file.
+        "dir": (cells["bearing"].to_numpy().round().astype(int) % 360).tolist(),
         "hours": hours,
         "q": grid.astype(int).ravel().tolist(),
         "no_data": NO_DATA,
@@ -632,6 +662,9 @@ def build() -> None:
         "generated": date.today().isoformat(),
         "timezone": TZ,
         "cell_size_m": CELL_SIZE_M,
+        # Each cell is one heading bin of one square, so a figure is per
+        # direction of travel and the viewer draws it as an arrow.
+        "heading_bins": HEADING_BINS,
         "stop_radius_m": STOP_RADIUS_M,
         "terminal_radius_m": TERMINAL_RADIUS_M,
         "min_samples": MIN_SAMPLES,

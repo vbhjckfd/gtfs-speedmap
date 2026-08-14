@@ -22,6 +22,7 @@ class VehicleRow(NamedTuple):
     lat: float
     lon: float
     speed: float  # metres per second, as published
+    bearing: float  # degrees clockwise from north, as published
 
 
 def parse_feed(data: bytes) -> list[VehicleRow]:
@@ -45,7 +46,11 @@ def parse_feed(data: bytes) -> list[VehicleRow]:
         trip = v.trip
         if not trip.trip_id or not trip.route_id:
             continue
-        if not pos.HasField("speed"):
+        # Both directions of a street fall in the same 25 m cell, and they are
+        # not the same road to a passenger, so a position without a heading
+        # cannot be placed. The Lviv feed carries one on every vehicle it
+        # publishes a speed for.
+        if not pos.HasField("speed") or not pos.HasField("bearing"):
             continue
 
         rows.append(
@@ -59,6 +64,7 @@ def parse_feed(data: bytes) -> list[VehicleRow]:
                 lat=pos.latitude,
                 lon=pos.longitude,
                 speed=pos.speed,
+                bearing=pos.bearing,
             )
         )
     return rows

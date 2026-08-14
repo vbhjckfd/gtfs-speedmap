@@ -172,8 +172,11 @@
       <h2>What this map shows</h2>
       <p>
         Running speed of Lviv city buses, aggregated into 25-metre grid cells from GTFS-RT
-        vehicle positions archived every ten seconds. Each dot is one cell: green means buses
-        move quickly there, red means they crawl. Use the hour slider to compare the morning
+        vehicle positions archived every ten seconds. Each arrow is one cell in one direction of
+        travel, pointing the way those buses were going: green means they move quickly there, red
+        means they crawl. The two directions of a street are counted apart, because the approach
+        to a junction queues while the run out of it is clear, and one figure for both would show
+        neither. Use the hour slider to compare the morning
         peak against the middle of the night, the month picker to compare months, and the day
         selector to separate weekdays from weekends — city-wide mean speed at 17:00 is about
         16.6 km/h on a weekday against 21.4 km/h at the weekend, so averaging the two together
@@ -207,7 +210,7 @@
         <code>route_type=3</code>, the same code as buses, so they are excluded by route name;
         trams are excluded by route type. Positions within 40 metres of a stop served by the
         vehicle's own trip are dropped, which turns dwell time at stops into gaps rather than
-        red dots, while the stop on the opposite side of the street — a different stop served by
+        red arrows, while the stop on the opposite side of the street — a different stop served by
         the other direction — still counts as running road. Vehicles whose own timestamp lags the
         feed by more than two minutes are discarded as stale, and repeated reports of the same
         vehicle at the same instant are counted once.

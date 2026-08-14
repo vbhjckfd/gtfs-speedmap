@@ -1,13 +1,23 @@
 /* Lviv bus speed map.
  *
- * Draws one dot per 25 m cell on a canvas overlay. Leaflet's own vector layer
- * creates a path per marker, which stalls well below the ~40k cells a busy
- * hour produces, so the dots are painted straight onto a single canvas.
+ * Draws one arrow per 25 m cell *per direction of travel* on a canvas overlay.
+ * Leaflet's own vector layer creates a path per marker, which stalls well below
+ * the ~40k cells a busy hour produces, so they are painted straight onto a
+ * single canvas.
  */
 
 const DATA = "data";
 const LVIV = [49.8397, 24.0297];
 const DOT_MIN_PX = 2.0;
+// Below this an arrowhead is a smudge, so the zoomed-out map keeps its dots:
+// at zoom 13 a 25 m cell is under two pixels across and no shape drawn in it
+// could carry a direction anyway.
+const ARROW_MIN_PX = 3.0;
+// Right-hand traffic. Each arrow is nudged to the right of its own heading so
+// the two directions of a street lie side by side, as the lanes do, rather than
+// on top of each other — their measured mean positions differ by less than the
+// GPS noise between them.
+const LANE_OFFSET = 0.55;
 const CACHE = new Map();
 
 let index = null;
@@ -157,7 +167,7 @@ const DotLayer = L.Layer.extend({
     this.redraw();
   },
 
-  // A cell is `cell_size_m` across; draw it at its true ground size so dots
+  // A cell is `cell_size_m` across; draw it at its true ground size so marks
   // merge into corridors when zoomed out and separate when zoomed in.
   _radiusPx() {
     return Math.max(DOT_MIN_PX, index.cell_size_m / metresPerPixel() / 2);
@@ -171,6 +181,7 @@ const DotLayer = L.Layer.extend({
     if (!current) return;
 
     const r = this._radiusPx();
+    const arrows = r >= ARROW_MIN_PX && Array.isArray(current.dir);
     const bounds = map.getBounds().pad(0.05);
     const { lat, lon } = current;
     const values = speedValues();
@@ -184,12 +195,77 @@ const DotLayer = L.Layer.extend({
       const p = map.latLngToContainerPoint([lat[i], lon[i]]);
       ctx.fillStyle = metricColor(values[i], metric);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      if (arrows) traceArrow(ctx, arrowAt(current, i, p, r), r);
+      else ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
   },
 });
+
+/* ---------- arrows ---------- */
+
+// sin and cos of every heading in a payload, computed once. A redraw touches
+// tens of thousands of cells and runs on every pan, so the trigonometry is not
+// worth repeating per frame.
+const HEADINGS = new WeakMap();
+
+function headingsOf(payload) {
+  let cached = HEADINGS.get(payload);
+  if (cached) return cached;
+  const n = payload.dir.length;
+  cached = { sin: new Float32Array(n), cos: new Float32Array(n) };
+  for (let i = 0; i < n; i++) {
+    const radians = (payload.dir[i] * Math.PI) / 180;
+    cached.sin[i] = Math.sin(radians);
+    cached.cos[i] = Math.cos(radians);
+  }
+  HEADINGS.set(payload, cached);
+  return cached;
+}
+
+/**
+ * Where one cell's arrow sits on screen and which way it points.
+ *
+ * Bearings are degrees clockwise from north; screen y grows downwards, so the
+ * unit vector along travel is (sin, −cos). Its right-hand normal carries the
+ * lane offset, and the hit test uses this same centre — an arrow has to be
+ * clickable where it is drawn, not where its cell's mean position is.
+ */
+function arrowAt(payload, i, p, r) {
+  const { sin, cos } = headingsOf(payload);
+  const ux = sin[i];
+  const uy = -cos[i];
+  return {
+    x: p.x - uy * r * LANE_OFFSET,
+    y: p.y + ux * r * LANE_OFFSET,
+    ux,
+    uy,
+  };
+}
+
+// A dart rather than a plain triangle: the notch in its tail reads as a
+// direction at four pixels, where a triangle still looks like a blob.
+function traceArrow(ctx, a, r) {
+  // Narrower than the cell is wide. A busy corridor stacks these nose to tail,
+  // and at the width of the square the barbs of one overlap the next into a
+  // sawtooth that reads as noise rather than as traffic.
+  const length = r * 1.8;
+  const half = r * 0.6;
+  const nx = -a.uy; // right-hand normal
+  const ny = a.ux;
+  ctx.moveTo(a.x + a.ux * length * 0.6, a.y + a.uy * length * 0.6);
+  ctx.lineTo(a.x - a.ux * length * 0.4 + nx * half, a.y - a.uy * length * 0.4 + ny * half);
+  ctx.lineTo(a.x - a.ux * length * 0.15, a.y - a.uy * length * 0.15);
+  ctx.lineTo(a.x - a.ux * length * 0.4 - nx * half, a.y - a.uy * length * 0.4 - ny * half);
+  ctx.closePath();
+}
+
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+function compass(degrees) {
+  return COMPASS[Math.round((((degrees % 360) + 360) % 360) / 45) % 8];
+}
 
 const dots = new DotLayer();
 
@@ -392,8 +468,9 @@ function gridOf(source) {
  * back, so callers decide what counts as near enough by checking `distance`.
  * Index is -1 and distance Infinity when the search found nothing at all.
  */
-function nearestIndex(source, latlng, maxDistance) {
+function nearestIndex(source, latlng, maxDistance, heading) {
   const grid = gridOf(source);
+  const directed = heading != null && Array.isArray(source.dir);
   const cosLat = Math.cos((latlng.lat * Math.PI) / 180);
   const gy = Math.floor(latlng.lat / grid.latStep);
   const gx = Math.floor(latlng.lng / grid.lonStep);
@@ -411,6 +488,10 @@ function nearestIndex(source, latlng, maxDistance) {
         const bucket = grid.buckets.get(`${gy + dy},${gx + dx}`);
         if (!bucket) continue;
         for (const i of bucket) {
+          // The two directions of a street are a lane apart, far closer than
+          // the position alone can separate, so a caller that knows which way
+          // it means says so and the other one is passed over.
+          if (directed && angleBetween(source.dir[i], heading) > 90) continue;
           const my = (source.lat[i] - latlng.lat) * METRES_PER_DEG_LAT;
           const mx = (source.lon[i] - latlng.lng) * METRES_PER_DEG_LAT * cosLat;
           const d = mx * mx + my * my;
@@ -423,6 +504,50 @@ function nearestIndex(source, latlng, maxDistance) {
     }
   }
   return { index: best, distance: Math.sqrt(bestDist) };
+}
+
+// Smallest angle between two bearings, in degrees.
+function angleBetween(a, b) {
+  const diff = Math.abs(((a - b) % 360) + 360) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
+/**
+ * The cell whose arrow is drawn nearest a click, measured in pixels.
+ *
+ * Two cells share a square, one per direction, and they are told apart on
+ * screen by the lane offset the arrows are drawn with — a few pixels. Ranking
+ * by ground distance would ignore exactly the nudge the reader is aiming at,
+ * so the candidates within `toleranceM` are ranked where they are painted.
+ */
+function nearestArrow(source, latlng, toleranceM) {
+  if (!Array.isArray(source.dir)) return nearestIndex(source, latlng, toleranceM);
+  const grid = gridOf(source);
+  const gy = Math.floor(latlng.lat / grid.latStep);
+  const gx = Math.floor(latlng.lng / grid.lonStep);
+  const rings = Math.ceil(toleranceM / BUCKET_M) + 1;
+  const at = map.latLngToContainerPoint(latlng);
+  const r = dots._radiusPx();
+  const perPixel = metresPerPixel();
+  let best = -1;
+  let bestPx = Infinity;
+
+  for (let dy = -rings; dy <= rings; dy++) {
+    for (let dx = -rings; dx <= rings; dx++) {
+      const bucket = grid.buckets.get(`${gy + dy},${gx + dx}`);
+      if (!bucket) continue;
+      for (const i of bucket) {
+        const p = map.latLngToContainerPoint([source.lat[i], source.lon[i]]);
+        const a = arrowAt(source, i, p, r);
+        const d = Math.hypot(a.x - at.x, a.y - at.y);
+        if (d < bestPx) {
+          bestPx = d;
+          best = i;
+        }
+      }
+    }
+  }
+  return { index: best, distance: bestPx * perPixel };
 }
 
 // Speed by hour for one cell, drawn as bars on the same colour ramp as the map
@@ -458,10 +583,10 @@ function sparkline(values, hours, selected) {
   );
 }
 
-async function cellProfile(latlng) {
+async function cellProfile(latlng, heading) {
   const profile = await fetchSelection(profileKey());
   if (!profile.lat.length) return "";
-  const hit = nearestIndex(profile, latlng, index.cell_size_m);
+  const hit = nearestIndex(profile, latlng, index.cell_size_m, heading);
   if (hit.index < 0 || hit.distance > index.cell_size_m) return "";
   const width = profile.hours.length;
   const values = profile.q.slice(hit.index * width, (hit.index + 1) * width);
@@ -476,9 +601,16 @@ function popupContent(i, spark) {
     .filter((m) => m.key !== metric.key && current[m.key])
     .map((m) => `<span>${m.label}</span><span>${format(current[m.key][i], m)} ${m.unit}</span>`)
     .join("");
+  // Every figure in here is for one direction of travel only, which is the
+  // whole point of splitting them: the approach to a junction and the run out
+  // of it are different roads at rush hour.
+  const heading = Array.isArray(current.dir)
+    ? `<div class="stat-label">traffic heading ${compass(current.dir[i])} · ` +
+      `${Math.round(current.dir[i])}°</div>`
+    : "";
   return (
     `<div class="cell-popup"><b>${format(value, metric)} ${metric.unit}</b>` +
-    `<div class="stat-label">${metric.label}</div>` +
+    `<div class="stat-label">${metric.label}</div>${heading}` +
     `<div class="stats">${rows}` +
     `<span>Samples</span><span>${current.n[i].toLocaleString()}</span></div>` +
     `<div class="spark-slot">${spark}</div></div>`
@@ -494,7 +626,7 @@ map.on("click", (e) => {
   // A fixed metre tolerance is unclickable when zoomed in and grabs the wrong
   // cell when zoomed out, so allow a constant ~12 px of slop instead.
   const tolerance = Math.max(index.cell_size_m, metresPerPixel() * 12);
-  const hit = nearestIndex(current, e.latlng, tolerance);
+  const hit = nearestArrow(current, e.latlng, tolerance);
   if (hit.index < 0 || hit.distance > tolerance) return;
 
   const at = L.latLng(current.lat[hit.index], current.lon[hit.index]);
@@ -508,7 +640,7 @@ map.on("click", (e) => {
   // back through setContent rather than patching the DOM — Leaflet re-renders
   // the popup from the string it was given, so a patched node is wiped on the
   // next update and the popup never resizes around it.
-  cellProfile(at)
+  cellProfile(at, Array.isArray(current.dir) ? current.dir[hit.index] : null)
     .then((svg) => {
       if (map.hasLayer(popup)) {
         popup.setContent(popupContent(hit.index, svg || "no hourly profile here"));
@@ -1144,6 +1276,7 @@ async function boot() {
   els.note.textContent =
     `Buses only. Positions within ${index.stop_radius_m} m of a stop on the ` +
     `vehicle's own trip are excluded, so this is running speed. ` +
+    (index.heading_bins ? `Each direction of travel is counted on its own. ` : "") +
     `${index.days.first} … ${index.days.last}, ` +
     `${index.samples.toLocaleString()} samples.`;
 

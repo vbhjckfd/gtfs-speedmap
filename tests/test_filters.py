@@ -11,7 +11,7 @@ import pytest
 from google.transit import gtfs_realtime_pb2
 
 from speedmap.aggregate import DayStats, accumulate, in_depot
-from speedmap.grid import cell_of, near_trip_stop
+from speedmap.grid import cell_of, heading_bin, near_trip_stop
 from speedmap.snapshots import parse_feed
 from speedmap.static_feed import _build
 from speedmap.utm import project_xy
@@ -89,6 +89,7 @@ def make_feed_bytes(entities: list[dict], feed_ts: int = FEED_TS) -> bytes:
         v.position.latitude = e["lat"]
         v.position.longitude = e["lon"]
         v.position.speed = e.get("speed", 8.0)
+        v.position.bearing = e.get("bearing", 0.0)
         v.timestamp = e.get("veh_ts", feed_ts)
         v.vehicle.id = e.get("vehicle_id", f"v{i}")
     return msg.SerializeToString()
@@ -274,7 +275,8 @@ def test_accumulator_averages_and_bins(feed):
     )
     assert stats["kept"] == 2
     assert len(acc) == 1
-    (month, hour, _cx, _cy), (n, sum_speed, sum_lat, _sum_lon) = next(iter(acc.items()))
+    key, (n, sum_speed, sum_lat, _sum_lon, _sin, _cos) = next(iter(acc.items()))
+    month, hour, _cx, _cy, _dir = key
     assert n == 2
     assert sum_speed == pytest.approx(16.0)
     # float32 in the wire format, hence the loose tolerance.
@@ -304,3 +306,51 @@ def test_stop_radius_boundary(feed):
     assert near_trip_stop(x + 60.0, y, own, feed) is False
     # A stop 200 m away in the same bucket neighbourhood must not count.
     assert near_trip_stop(x + 30.0, y, frozenset({"FAR"}), feed) is False
+
+
+# --- direction of travel --------------------------------------------------
+
+
+def test_heading_bins_are_centred_on_their_compass_point():
+    """Bin 0 is due north give or take half a bin, not north-to-north-east."""
+    assert heading_bin(0.0) == heading_bin(359.0) == heading_bin(20.0) == 0
+    assert heading_bin(90.0) == 2
+    assert heading_bin(180.0) == 4
+    # The seam between two bins, from either side.
+    assert heading_bin(22.0) == 0
+    assert heading_bin(23.0) == 1
+
+
+def test_opposite_directions_of_one_street_are_counted_apart(feed):
+    """The queue into a junction is not the run out of it, and they share a cell."""
+    acc, stats = run(
+        [
+            {"trip_id": "100_0_0", "route_id": "R_BUS", "speed": 2.0, "bearing": 0.0,
+             "vehicle_id": "north", **MOVING},
+            {"trip_id": "100_0_0", "route_id": "R_BUS", "speed": 12.0, "bearing": 180.0,
+             "vehicle_id": "south", **MOVING},
+        ],
+        feed,
+    )
+    assert stats["kept"] == 2
+    assert len(acc) == 2, "one cell per direction, not one cell for both"
+
+    squares = {(cx, cy) for _month, _hour, cx, cy, _dir in acc}
+    assert len(squares) == 1, "and they are the same square"
+    by_dir = {key[4]: sums for key, sums in acc.items()}
+    assert by_dir[heading_bin(0.0)][1] == pytest.approx(2.0)
+    assert by_dir[heading_bin(180.0)][1] == pytest.approx(12.0)
+
+
+def test_a_position_without_a_heading_cannot_be_placed():
+    """Without one there is no telling which side of the street it belongs to."""
+    msg = gtfs_realtime_pb2.FeedMessage()
+    msg.header.gtfs_realtime_version = "2.0"
+    msg.header.timestamp = FEED_TS
+    entity = msg.entity.add()
+    entity.id = "0"
+    v = entity.vehicle
+    v.trip.trip_id, v.trip.route_id = "100_0_0", "R_BUS"
+    v.position.latitude, v.position.longitude = MOVING["lat"], MOVING["lon"]
+    v.position.speed = 8.0
+    assert parse_feed(msg.SerializeToString()) == []
