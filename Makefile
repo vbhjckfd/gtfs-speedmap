@@ -3,6 +3,10 @@ PY := python3
 # So every target runs from a plain checkout, with or without `pip install -e .`.
 export PYTHONPATH := src
 
+# Keeps a Mac awake through hours-long archive passes; empty where caffeinate
+# does not exist, so the same targets still run on Linux.
+CAFFEINATE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -i)
+
 .PHONY: help ingest ingest-all segments segments-all build serve test deploy pull push update
 
 help:
@@ -18,21 +22,21 @@ help:
 	@echo "make push                     optional: back up aggregates to R2"
 
 ingest:
-	$(PY) -m speedmap.aggregate $(DATE) $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.aggregate $(DATE) $(ARGS)
 
 ingest-all:
-	$(PY) -m speedmap.aggregate --all $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.aggregate --all $(ARGS)
 
 # The other pass over the same archive: real vehicles timed between stops, which
 # is what the ruler's ride times are built from.
 segments:
-	$(PY) -m speedmap.segments $(DATE) $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.segments $(DATE) $(ARGS)
 
 segments-all:
-	$(PY) -m speedmap.segments --all $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.segments --all $(ARGS)
 
 build:
-	$(PY) -m speedmap.build_web $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.build_web $(ARGS)
 
 serve:
 	cd web && $(PY) -m http.server 8000
@@ -50,7 +54,7 @@ update: ingest-all segments-all build
 # holds data/ has nothing to fetch, and a first push is a 330 MB upload that
 # should be a decision, not a side effect.
 pull:
-	$(PY) -m speedmap.sync pull $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.sync pull $(ARGS)
 
 push:
-	$(PY) -m speedmap.sync push $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.sync push $(ARGS)
