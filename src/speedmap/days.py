@@ -1,35 +1,68 @@
-"""What the two archive passes share: writing a file safely, and running days side by side.
+"""What the archive passes share: one download of a day, and days side by side.
 
-Every day is its own pair of output files, so days are independent and a pass
-over the archive can run several at once, each in its own process so parsing
-and accumulating do not queue on one GIL.
+Every day is its own pair of output files per pass, so days are independent and
+a run over the archive can take several at once, each in its own process so
+parsing and accumulating do not queue on one GIL.
+
+A day's snapshots are ~245 MB and the passes are bound by download, not CPU, so
+`fold_day` streams each snapshot once into every pass that still needs the day.
 """
 
 from __future__ import annotations
 
-import os
 import traceback
-from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
+from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from typing import Protocol
 
 from . import r2
+from .snapshots import VehicleRow, parse_feed
+from .static_feed import StaticFeed, load_for_date
 
 
-def write_atomic(path: Path, write: Callable[[Path], object]) -> None:
-    """Write through a temp file beside `path` and rename it into place.
+class DayPass(Protocol):
+    """One pass's accumulators for one day, fed a snapshot at a time."""
 
-    The passes skip any day whose output exists, so a half-written file left by
-    an interrupted run would be trusted forever; and two processes building the
-    same cache must never read each other's partial bytes. The pid keeps two
-    writers of one path off the same temp file.
+    stats: dict
+
+    def add(self, rows: list[VehicleRow]) -> None: ...
+
+
+def fold_day(
+    client,
+    date_str: str,
+    passes: Sequence[Callable[[StaticFeed], DayPass]],
+    workers: int,
+) -> list[DayPass] | None:
+    """Download a day's snapshots once and feed every row to each pass.
+
+    Returns the filled passes, or None when R2 holds no snapshots for the day.
     """
-    temp = path.with_name(f".{path.name}.{os.getpid()}.part")
-    try:
-        write(temp)
-        temp.replace(path)
-    finally:
-        temp.unlink(missing_ok=True)
+    feed = load_for_date(client, date_str)
+    keys = r2.snapshot_keys(client, date_str)
+    if not keys:
+        return None
+    days = [make(feed) for make in passes]
+    errors = 0
+
+    def fetch(key: str) -> list[VehicleRow]:
+        nonlocal errors
+        try:
+            return parse_feed(r2.get_bytes(client, key))
+        except Exception:
+            # A single unreadable object must not sink a whole day.
+            errors += 1
+            return []
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for rows in pool.map(fetch, keys):
+            for day in days:
+                day.add(rows)
+
+    for day in days:
+        day.stats["snapshots"] = len(keys)
+        day.stats["snapshot_errors"] = errors
+    return days
 
 
 # One R2 client per worker process, made once: boto3 clients do not cross

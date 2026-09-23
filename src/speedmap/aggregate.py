@@ -7,42 +7,34 @@ running sums, so days can be merged later without revisiting R2.
 approach to a junction and the departure from it are nowhere near the same
 speed, so the two are counted apart.
 
-Run:
-    python -m speedmap.aggregate 2026-07-15
-    python -m speedmap.aggregate --all
+Run through ingest.py, which feeds this pass and segments.py from one download.
 """
 
 from __future__ import annotations
 
-import argparse
 import math
-import sys
 import time
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import r2
 from .config import (
     AGG_DIR,
-    CELL_SIZE_M,
     HIST_BIN_KMH,
     HIST_DIR,
-    JOBS,
     SPEED_MAX_MPS,
     STALE_MAX_S,
     TERMINAL_RADIUS_M,
     TZ,
-    WORKERS,
 )
-from .days import run_days, write_atomic
 from .depots import load_sites
+from .files import write_atomic
 from .grid import cell_of, heading_bin, in_bbox, near_trip_stop, project
-from .snapshots import VehicleRow, parse_feed
-from .static_feed import StaticFeed, load_for_date
+from .snapshots import VehicleRow
+from .static_feed import StaticFeed
 from .utm import project_xy
 
 _LOCAL_TZ = ZoneInfo(TZ)
@@ -180,108 +172,66 @@ def accumulate(
         stats["kept"] += 1
 
 
-def aggregate_day(
-    client, date_str: str, workers: int = WORKERS
-) -> tuple[pd.DataFrame, pd.DataFrame, DayStats]:
-    feed = load_for_date(client, date_str)
-    keys = r2.snapshot_keys(client, date_str)
-    if not keys:
-        return pd.DataFrame(), pd.DataFrame(), DayStats()
+class SpeedDay:
+    """One day of the speed map, folded in a snapshot at a time."""
 
-    acc: dict[tuple[str, int, int, int], list] = {}
-    hist: dict[tuple[str, int, int, int, int], int] = {}
-    seen: set[tuple[str, int]] = set()
-    stats = DayStats()
-    stats["snapshots"] = len(keys)
-    zones = depot_zones()
+    def __init__(self, feed: StaticFeed) -> None:
+        self.feed = feed
+        self.acc: dict[tuple[str, int, int, int], list] = {}
+        self.hist: dict[tuple[str, int, int, int, int], int] = {}
+        self.seen: set[tuple[str, int]] = set()
+        self.stats = DayStats()
+        self.zones = depot_zones()
 
-    def fetch(key: str) -> list[VehicleRow]:
-        try:
-            return parse_feed(r2.get_bytes(client, key))
-        except Exception:
-            # A single unreadable object must not sink a whole day.
-            stats["snapshot_errors"] += 1
-            return []
+    def add(self, rows: list[VehicleRow]) -> None:
+        accumulate(rows, self.feed, self.acc, self.seen, self.stats, self.zones, self.hist)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for rows in pool.map(fetch, keys):
-            accumulate(rows, feed, acc, seen, stats, zones, hist)
-
-    cells = pd.DataFrame(
-        [(*key, *sums) for key, sums in acc.items()],
-        columns=[
-            "month",
-            "hour",
-            "cx",
-            "cy",
-            "dir",
-            "n",
-            "sum_speed",
-            "sum_lat",
-            "sum_lon",
-            "sum_sin",
-            "sum_cos",
-        ],
-    )
-    bins = pd.DataFrame(
-        [(*key, n) for key, n in hist.items()],
-        columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
-    )
-    return cells, bins, stats
+    def frames(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        cells = pd.DataFrame(
+            [(*key, *sums) for key, sums in self.acc.items()],
+            columns=[
+                "month",
+                "hour",
+                "cx",
+                "cy",
+                "dir",
+                "n",
+                "sum_speed",
+                "sum_lat",
+                "sum_lon",
+                "sum_sin",
+                "sum_cos",
+            ],
+        )
+        bins = pd.DataFrame(
+            [(*key, n) for key, n in self.hist.items()],
+            columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
+        )
+        return cells, bins
 
 
-def write_day(client, date_str: str, force: bool = False, workers: int = WORKERS) -> bool:
-    AGG_DIR.mkdir(parents=True, exist_ok=True)
-    HIST_DIR.mkdir(parents=True, exist_ok=True)
-    out = AGG_DIR / f"{date_str}.parquet"
-    hist_out = HIST_DIR / f"{date_str}.parquet"
-    if out.exists() and hist_out.exists() and not force:
-        print(f"{date_str}  skip (already aggregated)", flush=True)
-        return False
+def _outputs(date_str: str) -> tuple[Path, Path]:
+    return AGG_DIR / f"{date_str}.parquet", HIST_DIR / f"{date_str}.parquet"
 
-    started = time.monotonic()
-    cells, bins, stats = aggregate_day(client, date_str, workers=workers)
+
+def is_done(date_str: str) -> bool:
+    return all(path.exists() for path in _outputs(date_str))
+
+
+def save(date_str: str, day: SpeedDay | None, started: float) -> bool:
+    cells, bins = day.frames() if day else (pd.DataFrame(), pd.DataFrame())
     if cells.empty:
         print(f"{date_str}  no data", flush=True)
         return False
 
+    AGG_DIR.mkdir(parents=True, exist_ok=True)
+    HIST_DIR.mkdir(parents=True, exist_ok=True)
+    out, hist_out = _outputs(date_str)
     write_atomic(out, lambda p: cells.to_parquet(p, index=False))
     write_atomic(hist_out, lambda p: bins.to_parquet(p, index=False))
-    elapsed = time.monotonic() - started
     print(
-        f"{date_str}  {stats['snapshots']} snapshots  {len(cells)} cells  "
-        f"{len(bins)} bins  {elapsed:.0f}s  {stats.render()}",
+        f"{date_str}  {day.stats['snapshots']} snapshots  {len(cells)} cells  "
+        f"{len(bins)} bins  {time.monotonic() - started:.0f}s  {day.stats.render()}",
         flush=True,
     )
     return True
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("date", nargs="?", help="YYYY-MM-DD")
-    ap.add_argument("--all", action="store_true", help="every day present in R2")
-    ap.add_argument("--force", action="store_true", help="re-aggregate days already on disk")
-    ap.add_argument("--workers", type=int, default=WORKERS, help="R2 fetch threads per day")
-    ap.add_argument("--jobs", type=int, default=JOBS, help="days processed side by side")
-    args = ap.parse_args(argv)
-
-    client = r2.make_client()
-    if args.all:
-        dates = r2.raw_dates(client)
-    elif args.date:
-        dates = [args.date]
-    else:
-        ap.error("pass a date or --all")
-
-    print(
-        f"cell={CELL_SIZE_M:g}m  {len(depot_zones())} depot zone(s)  {len(dates)} day(s)",
-        flush=True,
-    )
-    failed = run_days(
-        write_day, client, dates, args.jobs, force=args.force, workers=args.workers
-    )
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

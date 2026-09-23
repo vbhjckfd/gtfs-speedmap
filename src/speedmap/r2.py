@@ -28,7 +28,7 @@ def make_client():
         aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
         region_name="auto",
-        # The ingest fans out to WORKERS threads sharing one client; the default
+        # Each ingest day fans out to WORKERS threads sharing one client; the default
         # pool of 10 would serialise them.
         config=Config(max_pool_connections=64, retries={"max_attempts": 5, "mode": "standard"}),
     )

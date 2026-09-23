@@ -194,7 +194,7 @@ def discover(force: bool = False, merge: bool = False) -> list[dict]:
 
     paths = sorted(AGG_DIR.glob("*.parquet"))
     if not paths:
-        raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest-all` first")
+        raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest` first")
     df = pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True)
 
     feed = load_for_date(r2.make_client(), paths[-1].stem)

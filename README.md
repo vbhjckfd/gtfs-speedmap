@@ -11,7 +11,7 @@ Built from the GTFS-RT vehicle-position snapshots that
 ```
 R2  raw/YYYY-MM-DD/*.pb           GTFS-RT snapshots, every ~10 s
 R2  static/YYYY-MM-DD/static.zip  GTFS schedule as archived that day
-        │  python -m speedmap.aggregate --all   │  python -m speedmap.segments --all
+        │  python -m speedmap.ingest --all   (each snapshot fetched once, fed to both passes)
         ▼                                       ▼
 data/agg/YYYY-MM-DD.parquet                 data/seg/YYYY-MM-DD.parquet
   per-day sums, keyed                         stop-to-stop times, keyed (…, route, stop pair)
@@ -134,7 +134,7 @@ Discovery has to run against aggregates built **without** the mask, or the evide
 already been filtered away — plain `discover` refuses to overwrite an existing `data/depots.json`
 for that reason. Use `--merge` to widen the mask from already-masked aggregates: it keeps every
 known site and adds only what the new pass turns up. The order is: ingest, discover, then
-`ingest-all --force`.
+`make ingest ARGS="--force --only speed"`.
 
 The mask is applied twice: `aggregate.py` drops the samples at ingest, and `build_web.py` drops
 whole cells that land inside a zone. The second pass is what makes a widened mask visible after a
@@ -206,7 +206,7 @@ queue at the light, the wait to pull out.
 
 ```
 R2  raw/YYYY-MM-DD/*.pb
-        │  python -m speedmap.segments --all
+        │  python -m speedmap.ingest --all   (the same read that feeds the speed map)
         ▼
 data/seg/YYYY-MM-DD.parquet       (month, hour, route, direction, stop pair) -> n, sum_s
 data/seghist/YYYY-MM-DD.parquet   the same key plus a 5-second bin
@@ -299,10 +299,10 @@ the queue at its end. And the figures describe the buses that ran, not the timet
 Updating is manual, roughly monthly:
 
 ```bash
-make update   # ingest the new days, time the new legs, rebuild, deploy
+make update   # ingest the new days (speed cells and legs), rebuild, deploy
 ```
 
-`ingest-all` only reads days with no `data/agg/*.parquet` yet, so a month costs a few minutes even
+`make ingest` only reads days missing from `data/agg/` or `data/seg/`, so a month costs a few minutes even
 though the archive is 89 days deep. The map carries its own date range in the panel, so a stale
 deploy says so rather than pretending to be current.
 
@@ -330,20 +330,26 @@ cp .env.example .env    # R2 credentials — same bucket and keys as gtfs-eta
 ## Use
 
 ```bash
-make ingest DATE=2026-07-15   # aggregate one day
-make ingest-all               # every day in R2; resumable, skips days already done
+make ingest                   # every day in R2; resumable, skips days already done
+make ingest DATE=2026-07-15   # one day
 make build                    # merge into web/data/*.json
 make serve                    # http://localhost:8000
 make test
 make deploy                   # build + publish as a Cloudflare Worker (needs Node >=22: nvm use)
-make update                   # ingest new days, rebuild, deploy
+make update                   # ingest new days, then deploy
 ```
 
 `web/data/*.json` is generated and git-ignored, so the deploy uploads whatever the last `make build`
 produced. `make deploy` runs `build` first to keep those in step.
 
-`make ingest-all` re-reads only the days with no `data/agg/*.parquet` yet, so a new day costs one
-run of a couple of minutes. Pass `--force` to redo days after changing a filter.
+`make ingest` reads each day's ~245 MB of snapshots once and feeds both passes — the speed cells
+(`aggregate.py`) and the leg times (`segments.py`) — and only for a pass whose output is missing.
+A new day costs a couple of minutes. `ARGS=--force` redoes days already on disk; add
+`--only speed` or `--only segments` to redo just one pass after changing its filters.
+
+Days run side by side (`JOBS`, default 3), each in its own process with `WORKERS` fetch threads.
+The limit is R2 throughput, not CPU, so more jobs mostly add memory (~1 GB each); raise it on a
+faster link.
 
 ## Tuning
 
@@ -370,7 +376,7 @@ Every knob lives in `src/speedmap/config.py` and reads an env var of the same na
 | `DEPOT_PAD_M` | 40 | Grown onto each site's observed extent. |
 | `SCALE_LOW_KMH` / `SCALE_HIGH_KMH` | 5 / 35 | Colour ramp ends. Measured cell speeds: p25 ≈ 13, p50 ≈ 21, p90 ≈ 41 km/h. |
 
-Changing a filter means re-running `make ingest-all --force`; changing `MIN_SAMPLES`, a percentile
+Changing a filter means re-running `make ingest ARGS="--force --only speed"`; changing `MIN_SAMPLES`, a percentile
 or the colour scale only needs `make build`.
 
 `PROFILE_MIN_SAMPLES` is lower than `MIN_SAMPLES` because the sparkline splits a cell 19 ways: at
@@ -406,7 +412,7 @@ timezone, clamped to the nearest hour the collector actually polls.
   in `data/agg/`. The map is right either way, but any *analysis* over those parquets sees the site
   as ordinary slow cells and will mislead — before the last re-ingest one such core read as 123k
   samples at 1.2 km/h, slow in sixteen separate hours, which made a proposed change to the depot
-  heuristics look far more justified than it was. Run `make ingest-all ARGS=--force` first when
+  heuristics look far more justified than it was. Run `make ingest ARGS="--force --only speed"` first when
   measuring what the mask has left behind. Right now exactly one site is in that state
   (Воля-Гомулецька, 3.4k samples).
 - Hours 00:00–04:00 are absent: the collector does not poll then.

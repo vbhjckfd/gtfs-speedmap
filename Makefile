@@ -7,33 +7,25 @@ export PYTHONPATH := src
 # does not exist, so the same targets still run on Linux.
 CAFFEINATE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -i)
 
-.PHONY: help ingest ingest-all segments segments-all build serve test deploy pull push update
+.PHONY: help ingest build serve test deploy update pull push
 
 help:
-	@echo "make ingest DATE=2026-07-15   aggregate one day into data/agg/"
-	@echo "make ingest-all               aggregate every day present in R2 (resumable)"
-	@echo "make segments-all             time real stop-to-stop legs (resumable)"
-	@echo "make build                    merge data/agg/ and data/seg/ into web/data/*.json"
+	@echo "make ingest                   read every new day in R2 into data/ (resumable)"
+	@echo "make ingest DATE=2026-07-15   just that day"
+	@echo "    ARGS=--force              redo days already on disk"
+	@echo "    ARGS='--force --only segments'   redo one pass: speed or segments"
+	@echo "make build                    merge data/ into web/data/*.json"
 	@echo "make serve                    serve web/ on http://localhost:8000"
 	@echo "make test                     run unit tests"
 	@echo "make deploy                   build, then publish web/ as a Cloudflare Worker"
-	@echo "make update                   ingest new days, rebuild, deploy"
+	@echo "make update                   ingest new days, then deploy"
 	@echo "make pull                     optional: download aggregates from R2"
 	@echo "make push                     optional: back up aggregates to R2"
 
+# One read of the archive feeds both products: the speed cells and the real
+# stop-to-stop leg times the ruler's ride times are built from.
 ingest:
-	$(CAFFEINATE) $(PY) -m speedmap.aggregate $(DATE) $(ARGS)
-
-ingest-all:
-	$(CAFFEINATE) $(PY) -m speedmap.aggregate --all $(ARGS)
-
-# The other pass over the same archive: real vehicles timed between stops, which
-# is what the ruler's ride times are built from.
-segments:
-	$(CAFFEINATE) $(PY) -m speedmap.segments $(DATE) $(ARGS)
-
-segments-all:
-	$(CAFFEINATE) $(PY) -m speedmap.segments --all $(ARGS)
+	$(CAFFEINATE) $(PY) -m speedmap.ingest $(or $(DATE),--all) $(ARGS)
 
 build:
 	$(CAFFEINATE) $(PY) -m speedmap.build_web $(ARGS)
@@ -47,8 +39,10 @@ test:
 deploy: build
 	npx wrangler deploy
 
-update: ingest-all segments-all build
-	npx wrangler deploy
+# Sequenced in the recipe, not as prerequisites, so `make -j` cannot start the
+# build before the new days are on disk; ARGS are the ingest's, not the build's.
+update: ingest
+	$(MAKE) deploy ARGS=
 
 # Off the `update` path on purpose: a monthly run on the machine that already
 # holds data/ has nothing to fetch, and a first push is a 330 MB upload that

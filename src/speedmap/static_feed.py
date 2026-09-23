@@ -37,7 +37,7 @@ from .config import (
     STOP_BUCKET_M,
     STOP_MATCH_MAX_M,
 )
-from .days import write_atomic
+from .files import write_atomic
 from .geometry import cumulative, match_stops, simplify
 from .utm import project_xy
 

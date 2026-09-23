@@ -21,28 +21,22 @@ drives past a stop it does not serve does contribute, which is correct, because
 what is being measured is how long that route takes to get from one point to
 the next, not whether it opened its doors.
 
-Run:
-    python -m speedmap.segments 2026-07-15
-    python -m speedmap.segments --all
+Run through ingest.py, which feeds this pass and aggregate.py from one download.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 import time
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import r2
 from .config import (
-    JOBS,
     PATHS_FILE,
     RUN_GAP_MAX_S,
     SEG_BIN_S,
@@ -53,11 +47,10 @@ from .config import (
     STALE_MAX_S,
     STOP_PASS_RADIUS_M,
     TZ,
-    WORKERS,
 )
-from .days import run_days, write_atomic
+from .files import write_atomic
 from .grid import in_bbox, project, stops_near
-from .snapshots import VehicleRow, parse_feed
+from .snapshots import VehicleRow
 from .static_feed import StaticFeed, load_for_date
 
 _LOCAL_TZ = ZoneInfo(TZ)
@@ -87,38 +80,37 @@ class SegStats(Counter):
         return "  ".join(f"{k}={self[k]}" for k in self.ORDER)
 
 
-def collect_runs(
-    rows_by_snapshot, feed: StaticFeed, stats: SegStats
-) -> dict[tuple[str, str, str], list[Sample]]:
-    """Every vehicle's day, grouped by (vehicle, trip, route) and projected.
+def add_rows(
+    rows: list[VehicleRow],
+    feed: StaticFeed,
+    runs: dict[tuple[str, str, str], list[Sample]],
+    seen: set[tuple[str, int]],
+    stats: SegStats,
+) -> None:
+    """Fold one snapshot into every vehicle's day, grouped by (vehicle, trip, route).
 
     The stop and depot filters the speed map applies are deliberately absent:
     standing at a stop is the part of a ride this pass is here to measure.
     """
-    runs: dict[tuple[str, str, str], list[Sample]] = defaultdict(list)
-    seen: set[tuple[str, int]] = set()
     bus_routes = feed.bus_route_ids
-
-    for rows in rows_by_snapshot:
-        stats["rows_parsed"] += len(rows)
-        for row in rows:
-            if row.route_id not in bus_routes:
-                stats["drop_not_bus"] += 1
-                continue
-            if row.feed_ts - row.veh_ts > STALE_MAX_S:
-                stats["drop_stale"] += 1
-                continue
-            key = (row.vehicle_id, row.veh_ts)
-            if key in seen:
-                stats["drop_duplicate"] += 1
-                continue
-            seen.add(key)
-            if not in_bbox(row.lat, row.lon):
-                stats["drop_bbox"] += 1
-                continue
-            x, y = project(row.lon, row.lat)
-            runs[(row.vehicle_id, row.trip_id, row.route_id)].append((row.veh_ts, x, y))
-    return runs
+    stats["rows_parsed"] += len(rows)
+    for row in rows:
+        if row.route_id not in bus_routes:
+            stats["drop_not_bus"] += 1
+            continue
+        if row.feed_ts - row.veh_ts > STALE_MAX_S:
+            stats["drop_stale"] += 1
+            continue
+        key = (row.vehicle_id, row.veh_ts)
+        if key in seen:
+            stats["drop_duplicate"] += 1
+            continue
+        seen.add(key)
+        if not in_bbox(row.lat, row.lon):
+            stats["drop_bbox"] += 1
+            continue
+        x, y = project(row.lon, row.lat)
+        runs[(row.vehicle_id, row.trip_id, row.route_id)].append((row.veh_ts, x, y))
 
 
 def split_runs(samples: list[Sample]) -> list[list[Sample]]:
@@ -263,62 +255,56 @@ def accumulate(
 KEY_COLUMNS = ["month", "hour", "route_id", "direction", "from_stop", "to_stop"]
 
 
-def segments_day(
-    client, date_str: str, workers: int = WORKERS
-) -> tuple[pd.DataFrame, pd.DataFrame, SegStats]:
-    feed = load_for_date(client, date_str)
-    keys = r2.snapshot_keys(client, date_str)
-    if not keys:
-        return pd.DataFrame(), pd.DataFrame(), SegStats()
+class SegmentDay:
+    """One day of stop-to-stop legs. Snapshots only collect runs; the legs are
+    timed once the whole day is in, because a run needs its later samples."""
 
-    stats = SegStats()
-    stats["snapshots"] = len(keys)
+    def __init__(self, feed: StaticFeed) -> None:
+        self.feed = feed
+        self.runs: dict[tuple[str, str, str], list[Sample]] = defaultdict(list)
+        self.seen: set[tuple[str, int]] = set()
+        self.stats = SegStats()
 
-    def fetch(key: str) -> list[VehicleRow]:
-        try:
-            return parse_feed(r2.get_bytes(client, key))
-        except Exception:
-            stats["snapshot_errors"] += 1
-            return []
+    def add(self, rows: list[VehicleRow]) -> None:
+        add_rows(rows, self.feed, self.runs, self.seen, self.stats)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        runs = collect_runs(pool.map(fetch, keys), feed, stats)
-
-    acc: dict[tuple[str, int, str, str, str, str], list] = {}
-    hist: dict[tuple[str, int, str, str, str, str, int], int] = {}
-    accumulate(runs, feed, acc, hist, stats)
-
-    legs = pd.DataFrame(
-        [(*key, n, total) for key, (n, total) in acc.items()],
-        columns=[*KEY_COLUMNS, "n", "sum_s"],
-    )
-    bins = pd.DataFrame(
-        [(*key, n) for key, n in hist.items()],
-        columns=[*KEY_COLUMNS, "bin", "n"],
-    )
-    return legs, bins, stats
+    def frames(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        acc: dict[tuple[str, int, str, str, str, str], list] = {}
+        hist: dict[tuple[str, int, str, str, str, str, int], int] = {}
+        accumulate(self.runs, self.feed, acc, hist, self.stats)
+        legs = pd.DataFrame(
+            [(*key, n, total) for key, (n, total) in acc.items()],
+            columns=[*KEY_COLUMNS, "n", "sum_s"],
+        )
+        bins = pd.DataFrame(
+            [(*key, n) for key, n in hist.items()],
+            columns=[*KEY_COLUMNS, "bin", "n"],
+        )
+        return legs, bins
 
 
-def write_day(client, date_str: str, force: bool = False, workers: int = WORKERS) -> bool:
-    SEG_DIR.mkdir(parents=True, exist_ok=True)
-    SEG_HIST_DIR.mkdir(parents=True, exist_ok=True)
-    out = SEG_DIR / f"{date_str}.parquet"
-    hist_out = SEG_HIST_DIR / f"{date_str}.parquet"
-    if out.exists() and hist_out.exists() and not force:
-        print(f"{date_str}  skip (already timed)", flush=True)
-        return False
+def _outputs(date_str: str) -> tuple[Path, Path]:
+    return SEG_DIR / f"{date_str}.parquet", SEG_HIST_DIR / f"{date_str}.parquet"
 
-    started = time.monotonic()
-    legs, bins, stats = segments_day(client, date_str, workers=workers)
+
+def is_done(date_str: str) -> bool:
+    return all(path.exists() for path in _outputs(date_str))
+
+
+def save(date_str: str, day: SegmentDay | None, started: float) -> bool:
+    legs, bins = day.frames() if day else (pd.DataFrame(), pd.DataFrame())
     if legs.empty:
         print(f"{date_str}  no data", flush=True)
         return False
 
+    SEG_DIR.mkdir(parents=True, exist_ok=True)
+    SEG_HIST_DIR.mkdir(parents=True, exist_ok=True)
+    out, hist_out = _outputs(date_str)
     write_atomic(out, lambda p: legs.to_parquet(p, index=False))
     write_atomic(hist_out, lambda p: bins.to_parquet(p, index=False))
     print(
-        f"{date_str}  {stats['snapshots']} snapshots  {len(legs)} pairs  "
-        f"{time.monotonic() - started:.0f}s  {stats.render()}",
+        f"{date_str}  {day.stats['snapshots']} snapshots  {len(legs)} pairs  "
+        f"{time.monotonic() - started:.0f}s  {day.stats.render()}",
         flush=True,
     )
     return True
@@ -371,42 +357,3 @@ def write_paths(client, date_str: str) -> int:
     body = json.dumps(payload, ensure_ascii=False)
     write_atomic(PATHS_FILE, lambda p: p.write_text(body, encoding="utf-8"))
     return len(routes)
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("date", nargs="?", help="YYYY-MM-DD")
-    ap.add_argument("--all", action="store_true", help="every day present in R2")
-    ap.add_argument("--force", action="store_true", help="re-time days already on disk")
-    ap.add_argument("--paths-only", action="store_true", help="just refresh data/paths.json")
-    ap.add_argument("--workers", type=int, default=WORKERS, help="R2 fetch threads per day")
-    ap.add_argument("--jobs", type=int, default=JOBS, help="days processed side by side")
-    args = ap.parse_args(argv)
-
-    client = r2.make_client()
-    if args.paths_only:
-        dates = [args.date or r2.raw_dates(client)[-1]]
-        print(f"{write_paths(client, dates[0])} route-directions from {dates[0]}")
-        return 0
-    if args.all:
-        dates = r2.raw_dates(client)
-    elif args.date:
-        dates = [args.date]
-    else:
-        ap.error("pass a date or --all")
-
-    print(
-        f"pass radius={STOP_PASS_RADIUS_M:g}m  bin={SEG_BIN_S:g}s  {len(dates)} day(s)",
-        flush=True,
-    )
-    failed = run_days(
-        write_day, client, dates, args.jobs, force=args.force, workers=args.workers
-    )
-    # The newest schedule wins: it is the one the most recent legs were timed
-    # against, and stop ids are stable even when trip ids are renumbered.
-    print(f"{write_paths(client, dates[-1])} route-directions written to {PATHS_FILE.name}")
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

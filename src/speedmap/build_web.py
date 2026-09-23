@@ -159,7 +159,7 @@ def load_base_slices() -> tuple[dict, dict, list[str]]:
     """
     paths = sorted(AGG_DIR.glob("*.parquet"))
     if not paths:
-        raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest-all` first")
+        raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest` first")
 
     cell_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
     hist_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
@@ -171,7 +171,7 @@ def load_base_slices() -> tuple[dict, dict, list[str]]:
         if "dir" not in cells.columns:
             raise SystemExit(
                 f"{path} predates the direction split — re-run "
-                "`python -m speedmap.aggregate --all --force`"
+                '`make ingest ARGS="--force --only speed"`'
             )
         hist_path = HIST_DIR / path.name
         hist = pd.read_parquet(hist_path) if hist_path.exists() else None
