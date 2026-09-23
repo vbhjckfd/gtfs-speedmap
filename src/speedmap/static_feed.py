@@ -37,6 +37,7 @@ from .config import (
     STOP_BUCKET_M,
     STOP_MATCH_MAX_M,
 )
+from .days import write_atomic
 from .geometry import cumulative, match_stops, simplify
 from .utm import project_xy
 
@@ -311,6 +312,8 @@ def load_for_date(client, date_str: str, available: list[str] | None = None) -> 
             return pickle.load(fh)
 
     feed = _build(static_date, r2.get_bytes(client, f"{r2.STATIC_PREFIX}{static_date}/static.zip"))
-    with cache.open("wb") as fh:
-        pickle.dump(feed, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    # Several day workers can miss the cache at once; each builds its own copy,
+    # and the rename keeps any of them from loading another's half-written one.
+    body = pickle.dumps(feed, protocol=pickle.HIGHEST_PROTOCOL)
+    write_atomic(cache, lambda p: p.write_bytes(body))
     return feed

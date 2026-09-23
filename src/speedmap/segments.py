@@ -42,6 +42,7 @@ import pandas as pd
 
 from . import r2
 from .config import (
+    JOBS,
     PATHS_FILE,
     RUN_GAP_MAX_S,
     SEG_BIN_S,
@@ -54,6 +55,7 @@ from .config import (
     TZ,
     WORKERS,
 )
+from .days import run_days, write_atomic
 from .grid import in_bbox, project, stops_near
 from .snapshots import VehicleRow, parse_feed
 from .static_feed import StaticFeed, load_for_date
@@ -312,8 +314,8 @@ def write_day(client, date_str: str, force: bool = False, workers: int = WORKERS
         print(f"{date_str}  no data", flush=True)
         return False
 
-    legs.to_parquet(out, index=False)
-    bins.to_parquet(hist_out, index=False)
+    write_atomic(out, lambda p: legs.to_parquet(p, index=False))
+    write_atomic(hist_out, lambda p: bins.to_parquet(p, index=False))
     print(
         f"{date_str}  {stats['snapshots']} snapshots  {len(legs)} pairs  "
         f"{time.monotonic() - started:.0f}s  {stats.render()}",
@@ -366,7 +368,8 @@ def write_paths(client, date_str: str) -> int:
         "routes": routes,
     }
     PATHS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PATHS_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    body = json.dumps(payload, ensure_ascii=False)
+    write_atomic(PATHS_FILE, lambda p: p.write_text(body, encoding="utf-8"))
     return len(routes)
 
 
@@ -376,7 +379,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--all", action="store_true", help="every day present in R2")
     ap.add_argument("--force", action="store_true", help="re-time days already on disk")
     ap.add_argument("--paths-only", action="store_true", help="just refresh data/paths.json")
-    ap.add_argument("--workers", type=int, default=WORKERS)
+    ap.add_argument("--workers", type=int, default=WORKERS, help="R2 fetch threads per day")
+    ap.add_argument("--jobs", type=int, default=JOBS, help="days processed side by side")
     args = ap.parse_args(argv)
 
     client = r2.make_client()
@@ -395,12 +399,13 @@ def main(argv: list[str] | None = None) -> int:
         f"pass radius={STOP_PASS_RADIUS_M:g}m  bin={SEG_BIN_S:g}s  {len(dates)} day(s)",
         flush=True,
     )
-    for date_str in dates:
-        write_day(client, date_str, force=args.force, workers=args.workers)
+    failed = run_days(
+        write_day, client, dates, args.jobs, force=args.force, workers=args.workers
+    )
     # The newest schedule wins: it is the one the most recent legs were timed
     # against, and stop ids are stable even when trip ids are renumbered.
     print(f"{write_paths(client, dates[-1])} route-directions written to {PATHS_FILE.name}")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -31,12 +31,14 @@ from .config import (
     CELL_SIZE_M,
     HIST_BIN_KMH,
     HIST_DIR,
+    JOBS,
     SPEED_MAX_MPS,
     STALE_MAX_S,
     TERMINAL_RADIUS_M,
     TZ,
     WORKERS,
 )
+from .days import run_days, write_atomic
 from .depots import load_sites
 from .grid import cell_of, heading_bin, in_bbox, near_trip_stop, project
 from .snapshots import VehicleRow, parse_feed
@@ -234,21 +236,22 @@ def write_day(client, date_str: str, force: bool = False, workers: int = WORKERS
     out = AGG_DIR / f"{date_str}.parquet"
     hist_out = HIST_DIR / f"{date_str}.parquet"
     if out.exists() and hist_out.exists() and not force:
-        print(f"{date_str}  skip (already aggregated)")
+        print(f"{date_str}  skip (already aggregated)", flush=True)
         return False
 
     started = time.monotonic()
     cells, bins, stats = aggregate_day(client, date_str, workers=workers)
     if cells.empty:
-        print(f"{date_str}  no data")
+        print(f"{date_str}  no data", flush=True)
         return False
 
-    cells.to_parquet(out, index=False)
-    bins.to_parquet(hist_out, index=False)
+    write_atomic(out, lambda p: cells.to_parquet(p, index=False))
+    write_atomic(hist_out, lambda p: bins.to_parquet(p, index=False))
     elapsed = time.monotonic() - started
     print(
         f"{date_str}  {stats['snapshots']} snapshots  {len(cells)} cells  "
-        f"{len(bins)} bins  {elapsed:.0f}s  {stats.render()}"
+        f"{len(bins)} bins  {elapsed:.0f}s  {stats.render()}",
+        flush=True,
     )
     return True
 
@@ -258,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("date", nargs="?", help="YYYY-MM-DD")
     ap.add_argument("--all", action="store_true", help="every day present in R2")
     ap.add_argument("--force", action="store_true", help="re-aggregate days already on disk")
-    ap.add_argument("--workers", type=int, default=WORKERS)
+    ap.add_argument("--workers", type=int, default=WORKERS, help="R2 fetch threads per day")
+    ap.add_argument("--jobs", type=int, default=JOBS, help="days processed side by side")
     args = ap.parse_args(argv)
 
     client = r2.make_client()
@@ -269,10 +273,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         ap.error("pass a date or --all")
 
-    print(f"cell={CELL_SIZE_M:g}m  {len(depot_zones())} depot zone(s)  {len(dates)} day(s)")
-    for date_str in dates:
-        write_day(client, date_str, force=args.force, workers=args.workers)
-    return 0
+    print(
+        f"cell={CELL_SIZE_M:g}m  {len(depot_zones())} depot zone(s)  {len(dates)} day(s)",
+        flush=True,
+    )
+    failed = run_days(
+        write_day, client, dates, args.jobs, force=args.force, workers=args.workers
+    )
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

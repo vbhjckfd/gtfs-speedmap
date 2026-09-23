@@ -80,8 +80,14 @@ PROFILE_MIN_HOURS = _int("PROFILE_MIN_HOURS", 6)
 # Hours and months are local-time concepts; the feed is UTC.
 TZ = os.environ.get("TZ_LOCAL", "Europe/Kyiv")
 
-# Concurrent R2 GETs.
+# Concurrent R2 GETs, per process.
 WORKERS = _int("WORKERS", 16)
+
+# Days processed side by side, each in its own process. The pass is bound by
+# download bandwidth, not CPU: a day is ~245 MB, one day alone pulls ~2.3 MB/s
+# on half a core, three at once ~2.7 MB/s together. More jobs only add memory
+# (~0.7 GB each); raise it on a faster link.
+JOBS = _int("JOBS", 3)
 
 # Lviv bounding box (lat_min, lat_max, lon_min, lon_max) — a coarse sanity gate.
 BBOX = (49.70, 49.95, 23.85, 24.20)
