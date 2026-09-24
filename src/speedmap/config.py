@@ -89,6 +89,14 @@ WORKERS = _int("WORKERS", 16)
 # (~0.7 GB each); raise it on a faster link.
 JOBS = _int("JOBS", 3)
 
+# A day that raises is retried DAY_RETRIES times, waiting RETRY_BASE_S and
+# doubling — long enough to ride out a Wi-Fi drop or a wake from sleep. After
+# FAIL_STREAK_MAX days in a row fail anyway, the run stops rather than failing
+# every remaining day in seconds.
+DAY_RETRIES = _int("DAY_RETRIES", 3)
+RETRY_BASE_S = _float("RETRY_BASE_S", 30.0)
+FAIL_STREAK_MAX = _int("FAIL_STREAK_MAX", 3)
+
 # Lviv bounding box (lat_min, lat_max, lon_min, lon_max) — a coarse sanity gate.
 BBOX = (49.70, 49.95, 23.85, 24.20)
 

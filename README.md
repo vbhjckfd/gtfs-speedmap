@@ -351,6 +351,11 @@ Days run side by side (`JOBS`, default 3), each in its own process with `WORKERS
 The limit is R2 throughput, not CPU, so more jobs mostly add memory (~1 GB each); raise it on a
 faster link.
 
+A day that fails is retried after 30, 60 and 120 s, which rides out a Wi-Fi drop or the minute after
+a wake from sleep. Three days in a row failing even so stops the run instead of failing the rest of
+the archive in seconds; `caffeinate -i` keeps the Mac from idling to sleep but not from sleeping on
+a closed lid, so keep it open (or on power with an external display) through a full `--force`.
+
 ## Tuning
 
 Every knob lives in `src/speedmap/config.py` and reads an env var of the same name.

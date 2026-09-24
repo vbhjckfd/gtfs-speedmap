@@ -118,3 +118,53 @@ def test_an_interrupted_write_leaves_neither_file_nor_temp(tmp_path):
     write_atomic(target, lambda path: path.write_bytes(b"whole"))
     assert target.read_bytes() == b"whole"
     assert list(tmp_path.iterdir()) == [target]
+
+
+class Flaky:
+    """write_day stand-in: raises for each listed date, that many times."""
+
+    def __init__(self, fail: dict[str, int]):
+        self.fail = dict(fail)
+        self.calls = []
+
+    def __call__(self, client, date_str, **kwargs):
+        self.calls.append(date_str)
+        if self.fail.get(date_str, 0) > 0:
+            self.fail[date_str] -= 1
+            raise OSError("Could not connect to the endpoint URL")
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    waits = []
+    monkeypatch.setattr(days.time, "sleep", waits.append)
+    monkeypatch.setattr(days, "DAY_RETRIES", 3)
+    monkeypatch.setattr(days, "RETRY_BASE_S", 30.0)
+    monkeypatch.setattr(days, "FAIL_STREAK_MAX", 3)
+    return waits
+
+
+def test_a_network_blip_is_retried_with_backoff(no_wait):
+    write_day = Flaky({"d1": 2})
+    assert days.run_days(write_day, None, ["d1", "d2"], jobs=1) == 0
+    assert write_day.calls == ["d1", "d1", "d1", "d2"]
+    assert no_wait == [30.0, 60.0]
+
+
+def test_one_bad_day_does_not_stop_the_run(no_wait):
+    write_day = Flaky({"d2": 99})
+    assert days.run_days(write_day, None, ["d1", "d2", "d3"], jobs=1) == 1
+    assert write_day.calls[-1] == "d3"
+
+
+def test_failures_in_a_row_stop_the_run(no_wait):
+    dead = {d: 99 for d in ["d1", "d2", "d3", "d4", "d5"]}
+    write_day = Flaky(dead)
+    assert days.run_days(write_day, None, list(dead), jobs=1) == 3
+    assert "d4" not in write_day.calls
+
+
+def test_a_success_resets_the_streak(no_wait):
+    write_day = Flaky({"d1": 99, "d2": 99, "d4": 99, "d5": 99})
+    assert days.run_days(write_day, None, ["d1", "d2", "d3", "d4", "d5", "d6"], jobs=1) == 4
+    assert write_day.calls[-1] == "d6"
