@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from datetime import datetime, timezone
 
 from . import aggregate, r2, segments
 from .config import CELL_SIZE_M, JOBS, PATHS_FILE, SEG_BIN_S, STOP_PASS_RADIUS_M, WORKERS
@@ -54,7 +55,7 @@ def write_day(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("date", nargs="?", help="YYYY-MM-DD")
-    ap.add_argument("--all", action="store_true", help="every day present in R2")
+    ap.add_argument("--all", action="store_true", help="every finished day in R2 (not today)")
     ap.add_argument("--force", action="store_true", help="redo days already on disk")
     ap.add_argument("--only", choices=list(PASSES), help="run one pass instead of both")
     ap.add_argument("--workers", type=int, default=WORKERS, help="R2 fetch threads per day")
@@ -63,7 +64,11 @@ def main(argv: list[str] | None = None) -> int:
 
     client = r2.make_client()
     if args.all:
-        dates = r2.raw_dates(client)
+        # Today's folder is still being written. Ingested now, it would be saved
+        # as a finished day and skipped by every later run, so the map would keep
+        # a half day for good. Folders are named by UTC date, as are the keys.
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        dates = [d for d in r2.raw_dates(client) if d < today]
     elif args.date:
         dates = [args.date]
     else:

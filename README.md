@@ -330,7 +330,7 @@ cp .env.example .env    # R2 credentials — same bucket and keys as gtfs-eta
 ## Use
 
 ```bash
-make ingest                   # every day in R2; resumable, skips days already done
+make ingest                   # every finished day in R2 (not today, UTC); resumable
 make ingest DATE=2026-07-15   # one day
 make build                    # merge into web/data/*.json
 make serve                    # http://localhost:8000

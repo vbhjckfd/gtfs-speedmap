@@ -10,7 +10,7 @@ CAFFEINATE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -
 .PHONY: help ingest build serve test deploy update pull push
 
 help:
-	@echo "make ingest                   read every new day in R2 into data/ (resumable)"
+	@echo "make ingest                   read every finished day in R2 into data/ (resumable)"
 	@echo "make ingest DATE=2026-07-15   just that day"
 	@echo "    ARGS=--force              redo days already on disk"
 	@echo "    ARGS='--force --only segments'   redo one pass: speed or segments"
