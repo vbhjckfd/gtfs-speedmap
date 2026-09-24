@@ -335,7 +335,7 @@ make ingest DATE=2026-07-15   # one day
 make build                    # merge into web/data/*.json
 make serve                    # http://localhost:8000
 make test
-make deploy                   # build + publish as a Cloudflare Worker (needs Node >=22: nvm use)
+make deploy                   # build + publish as a Cloudflare Worker (Node from .nvmrc via nvm)
 make update                   # ingest new days, then deploy
 ```
 

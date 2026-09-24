@@ -7,6 +7,12 @@ export PYTHONPATH := src
 # does not exist, so the same targets still run on Linux.
 CAFFEINATE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -i)
 
+# Wrangler needs Node >= 22, pinned in .nvmrc. nvm is a shell function, so it is
+# sourced in each recipe's own shell rather than inherited from yours; empty
+# where nvm is not installed, leaving whatever node is on PATH.
+NVM_SH := $(or $(NVM_DIR),$(HOME)/.nvm)/nvm.sh
+NODE := $(shell test -s "$(NVM_SH)" && echo '. "$(NVM_SH)" && nvm use --silent &&')
+
 .PHONY: help ingest build serve test deploy update pull push
 
 help:
@@ -37,7 +43,7 @@ test:
 	$(PY) -m pytest -q
 
 deploy: build
-	npx wrangler deploy
+	$(NODE) npx wrangler deploy
 
 # Sequenced in the recipe, not as prerequisites, so `make -j` cannot start the
 # build before the new days are on disk; ARGS are the ingest's, not the build's.
