@@ -308,7 +308,8 @@ worth — about 4.5 GB — however long the archive grows. The heading fold, the
 free-flow reference are all taken from the month itself, so a finished month never has to be
 rebuilt because a later one arrived. Its map files are kept in R2 under `derived/web/YYYY-MM/`, and
 the deploy job gathers every month from there and writes `index.json`. A normal run therefore
-builds one month: the one still running.
+builds one month: the one still running. The run on the 8th also rebuilds the month before, so a
+failed run on the 1st still gets that month closed a week later rather than left at 3/4.
 
 After changing the build, start the job by hand from the Actions tab with months `all` — every
 month then gets its own runner in parallel — or name the months, `2026-07 2026-08`. By hand locally:

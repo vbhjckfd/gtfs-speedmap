@@ -1,6 +1,6 @@
 [project]
 name = "gtfs-speedmap"
-version = "0.1.9"
+version = "0.1.10"
 description = "Average bus speed map for Lviv, built from archived GTFS-RT vehicle positions"
 readme = "README.md"
 license = "WTFPL"

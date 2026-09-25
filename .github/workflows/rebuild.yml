@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       months:
-        description: '"all", or YYYY-MM separated by spaces; empty for the month of yesterday'
+        description: '"all", or YYYY-MM separated by spaces; empty for the latest one or two'
         required: false
         default: ""
 
@@ -36,7 +36,7 @@ env:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       months: ${{ steps.months.outputs.months }}
     steps:
@@ -63,14 +63,17 @@ jobs:
           elif wanted:
               months = wanted
           else:
-              yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-              months = [yesterday.strftime("%Y-%m")]
+              # The month of yesterday, and of the previous run's yesterday: if
+              # the run on the 1st failed, the next one still closes the month
+              # just finished instead of leaving it at 3/4.
+              now = datetime.now(timezone.utc)
+              months = sorted({(now - timedelta(days=d)).strftime("%Y-%m") for d in (1, 8)})
           print(f"months={json.dumps(months)}")
           EOF
 
   month:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # About two minutes a day at JOBS=3: a week is a quarter of an hour, a
     # month from scratch about an hour.
     timeout-minutes: 240
@@ -109,7 +112,7 @@ jobs:
     needs: [plan, month]
     # A month that failed keeps its previous build in R2, so the rest still ship.
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
