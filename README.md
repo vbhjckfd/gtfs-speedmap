@@ -171,7 +171,7 @@ dropdown repaints without refetching.
 | Statistic | What it answers |
 |---|---|
 | Average | Time-weighted mean — the figure that matches how long a journey takes. |
-| Median | Ignores the tail of waits at lights; a better read on conditions, a worse one on delay. |
+| Median | Ignores the tail of waits at lights; a better read on conditions, a worse one on delay. The map's default. |
 | Slow day (p15) / Fast day (p85) | The bad and good ends of the same distribution. |
 | Unreliability (p85 − p15) | How unpredictable a stretch is, which is not the same as how slow. |
 | **% of free-flow** | Median over that cell's *own* p85 across the whole archive. |
@@ -401,8 +401,9 @@ https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=r
 
 `month` takes `all` or `YYYY-MM`; `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
 `stat` takes `v`, `med`, `p15`, `p85`, `spread` or `rel`. Anything unrecognised falls back to the
-default rather than erroring, and a link written before an axis existed still opens — `days`
-defaults to `all`. The canonical link stays on the bare homepage on purpose — one page for search
+default rather than erroring. With no query string the map opens on the newest month the data
+covers end to end, weekdays only. A link written before an axis existed still opens as it meant —
+one with a `month` but no `days` gets `all` days. The canonical link stays on the bare homepage on purpose — one page for search
 engines to index, not a thousand near-identical ones. Slider moves and pans use `replaceState`, so
 dragging does not bury the previous page under twenty history entries.
 

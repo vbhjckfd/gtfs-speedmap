@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Lviv bus speeds — average speed by hour and month, mapped</title>
+    <title>Lviv bus speeds — median speed by hour and month, mapped</title>
     <meta
       name="description"
       content="Where Lviv's buses actually run fast and where they crawl. Speed per 25 m of street, from millions of archived GTFS-RT positions, with an hour-of-day slider, a month picker and a weekday/weekend split. Shows average, median, percentiles, and speed as a share of each street's own free-flow. Stops excluded, so it shows running speed."
@@ -24,7 +24,7 @@
     <meta property="og:title" content="Lviv bus speeds, hour by hour" />
     <meta
       property="og:description"
-      content="Average bus speed per 25 m of street across Lviv, built from millions of archived GTFS-RT vehicle positions. Green runs fast, red crawls. Slide through the day, pick a month."
+      content="Median bus speed per 25 m of street across Lviv, built from millions of archived GTFS-RT vehicle positions. Green runs fast, red crawls. Slide through the day, pick a month."
     />
     <meta property="og:url" content="https://gtfs-speedmap.vbhjckfd.workers.dev/" />
     <meta property="og:image" content="https://gtfs-speedmap.vbhjckfd.workers.dev/og.png" />
@@ -41,7 +41,7 @@
     <meta name="twitter:title" content="Lviv bus speeds, hour by hour" />
     <meta
       name="twitter:description"
-      content="Average bus speed per 25 m of street across Lviv, from archived GTFS-RT positions. Green runs fast, red crawls."
+      content="Median bus speed per 25 m of street across Lviv, from archived GTFS-RT positions. Green runs fast, red crawls."
     />
     <meta name="twitter:image" content="https://gtfs-speedmap.vbhjckfd.workers.dev/og.png" />
     <meta
@@ -54,7 +54,7 @@
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": "Lviv bus running speeds by hour and month",
-        "description": "Average bus speed per 25 m grid cell in Lviv, Ukraine, aggregated by hour of day and month from archived GTFS-RT vehicle positions. Positions within 40 m of a stop on the vehicle's own trip are excluded, so the figures describe running speed rather than dwell time. Trolleybuses and trams are excluded.",
+        "description": "Median bus speed per 25 m grid cell in Lviv, Ukraine, aggregated by hour of day and month from archived GTFS-RT vehicle positions. Positions within 40 m of a stop on the vehicle's own trip are excluded, so the figures describe running speed rather than dwell time. Trolleybuses and trams are excluded.",
         "url": "https://gtfs-speedmap.vbhjckfd.workers.dev/",
         "license": "http://www.wtfpl.net/txt/copying/",
         "codeRepository": "https://github.com/vbhjckfd/gtfs-speedmap",
@@ -184,8 +184,8 @@
       </p>
       <h2>Congestion against raw speed</h2>
       <p>
-        The Statistic selector offers more than an average. The median ignores the tail of waits
-        at lights; the 15th and 85th percentiles show a bad day and a good one; their difference
+        The Statistic selector opens on the median, which ignores the tail of waits at lights and
+        so shows how a street usually flows; the average is there too; the 15th and 85th percentiles show a bad day and a good one; their difference
         measures how unpredictable a stretch of road is. "% of free-flow" divides each cell's
         speed by that same cell's own 85th-percentile speed across the whole archive, which
         separates congestion from slowness: a narrow old-town lane that runs at 20 km/h at three

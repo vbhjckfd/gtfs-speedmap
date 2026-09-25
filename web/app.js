@@ -338,6 +338,31 @@ function currentHour() {
   );
 }
 
+// Day counts for the month on screen, so "Weekdays" says how many weekdays that
+// month holds rather than the whole archive. An index built before per-month
+// counts existed has only the archive-wide ones.
+function labelDaytypes() {
+  const month = index.months.find((m) => m.key === els.month.value);
+  for (const option of els.daytype.options) {
+    const daytype = index.daytypes.find((d) => d.key === option.value);
+    const days = month?.daytypes?.[option.value] ?? daytype.days;
+    option.textContent = `${daytype.label} (${days}d)`;
+  }
+}
+
+// The newest month the data covers from its first day to its last. The month
+// still being collected is partial, and so is the one collection started in;
+// either would make a thin default. Falls back to all months.
+function lastFullMonth() {
+  const full = index.months.filter((m) => {
+    const [y, mo] = m.key.split("-").map(Number);
+    const first = `${m.key}-01`;
+    const last = `${m.key}-${String(new Date(Date.UTC(y, mo, 0)).getUTCDate()).padStart(2, "0")}`;
+    return first >= index.days.first && last <= index.days.last;
+  });
+  return full.length ? full[full.length - 1].key : "all";
+}
+
 function readUrl() {
   const params = new URLSearchParams(location.search);
 
@@ -346,6 +371,9 @@ function readUrl() {
     els.month.value = month;
   }
 
+  // A link from before the day split existed carries a month but no days, and
+  // meant all of them.
+  if (month && !params.has("days")) els.daytype.value = "all";
   const daytype = params.get("days");
   if (daytype && [...els.daytype.options].some((o) => o.value === daytype)) {
     els.daytype.value = daytype;
@@ -400,8 +428,7 @@ function prefetchNeighbours() {
 
 function describe(count) {
   const parts = [els.month.selectedOptions[0].textContent];
-  // "All days" is the default, so saying so is noise; a restriction is not.
-  if (els.daytype.value !== "all") parts.push(els.daytype.selectedOptions[0].textContent);
+  parts.push(els.daytype.selectedOptions[0].textContent);
   const hour = String(els.hour.value).padStart(2, "0");
   parts.push(els.allHours.checked ? "all hours" : `${hour}:00–${hour}:59`);
   parts.push(`${count.toLocaleString()} cells`);
@@ -1251,15 +1278,16 @@ async function boot() {
   all.value = "all";
   all.textContent = `All months (${index.days.count}d)`;
   els.month.append(all);
-  els.month.value = "all";
+  els.month.value = lastFullMonth();
 
   for (const daytype of index.daytypes) {
     const option = document.createElement("option");
     option.value = daytype.key;
-    option.textContent = `${daytype.label} (${daytype.days}d)`;
     els.daytype.append(option);
   }
-  els.daytype.value = "all";
+  // Weekdays by default: mixing in weekends blurs the rush hours most people
+  // open the map to see. Falls back to all days if the split is missing.
+  els.daytype.value = index.daytypes.some((d) => d.key === "wd") ? "wd" : "all";
 
   for (const metric of index.metrics) {
     const option = document.createElement("option");
@@ -1267,6 +1295,10 @@ async function boot() {
     option.textContent = metric.label;
     els.metric.append(option);
   }
+  // Median by default: the map is for how a street usually flows, and the mean
+  // is dragged down by the odd long wait at a light. The ride timer keeps the
+  // mean, since only that adds up along a journey.
+  if (index.metrics.some((m) => m.key === "med")) els.metric.value = "med";
 
   KMH_METRIC.scale = { low: index.scale.low_kmh, high: index.scale.high_kmh };
 
@@ -1276,6 +1308,7 @@ async function boot() {
   els.hour.value = String(currentHour());
 
   readUrl();
+  labelDaytypes();
   paintLegend();
   syncHourLabel();
   rulerBoot();
@@ -1289,7 +1322,10 @@ async function boot() {
   dots.addTo(map);
   await render();
 
-  els.month.addEventListener("change", render);
+  els.month.addEventListener("change", () => {
+    labelDaytypes();
+    render();
+  });
   els.daytype.addEventListener("change", render);
   els.hour.addEventListener("input", () => {
     syncHourLabel();

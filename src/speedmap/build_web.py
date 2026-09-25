@@ -667,10 +667,15 @@ def build() -> None:
     hours = sorted({int(h) for frame in cell_slices.values() for h in frame["hour"].unique()})
     days_per_month: dict[str, int] = {}
     days_per_type: dict[str, int] = {ALL: len(days)}
+    # Per month too, so the day picker can say how many weekdays the chosen
+    # month holds rather than how many the whole archive does.
+    types_per_month: dict[str, dict[str, int]] = {}
     for day in days:
         days_per_month[day[:7]] = days_per_month.get(day[:7], 0) + 1
         kind = daytype_of(day)
         days_per_type[kind] = days_per_type.get(kind, 0) + 1
+        counts = types_per_month.setdefault(day[:7], {})
+        counts[kind] = counts.get(kind, 0) + 1
 
     # Fold the heading bins down before anything is derived from them, so the
     # arrows, the percentiles and the free-flow reference are all folded the
@@ -779,6 +784,10 @@ def build() -> None:
                 "key": month,
                 "label": f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[:4]}",
                 "days": days_per_month.get(month, 0),
+                "daytypes": {
+                    ALL: days_per_month.get(month, 0),
+                    **{key: types_per_month.get(month, {}).get(key, 0) for key in DAYTYPES},
+                },
             }
             for month in months
         ],
