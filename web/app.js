@@ -372,9 +372,6 @@ function readUrl() {
     els.month.value = month;
   }
 
-  // A link from before the day split existed carries a month but no days, and
-  // meant all of them.
-  if (month && !params.has("days")) els.daytype.value = "all";
   const daytype = params.get("days");
   if (daytype && [...els.daytype.options].some((o) => o.value === daytype)) {
     els.daytype.value = daytype;
