@@ -109,11 +109,13 @@ SCALE_LOW_KMH = _float("SCALE_LOW_KMH", 5.0)
 SCALE_HIGH_KMH = _float("SCALE_HIGH_KMH", 35.0)
 
 # --- Relative speed ("% of free-flow") -----------------------------------
-# A cell's free-flow reference is its own p85 over every hour, month and day
-# type, so the ratio answers "how congested is this bit of road right now"
+# A cell's free-flow reference is its own p85 over every hour and day type of
+# the month, so the ratio answers "how congested is this bit of road right now"
 # rather than "is this bit of road fast" — the two are near-uncorrelated
-# (measured r = 0.07). The reference must be global: derive it per selection
-# and the colours shift meaninglessly as the slider moves.
+# (measured r = 0.07). The reference must span the whole month: derive it per
+# selection and the colours shift meaninglessly as the slider moves. It stops at
+# the month so each month builds on its own, and a month of road works is
+# measured against its own free flow rather than last spring's.
 FREE_FLOW_Q = _float("FREE_FLOW_Q", 0.85)
 # Below this, the ratio is noise over noise: a cell whose free-flow is 5 km/h
 # has no free flow to speak of. Measured reference speeds run p25 18.5,
@@ -174,6 +176,12 @@ SEG_HIST_DIR = DATA_DIR / "seghist"
 STATIC_CACHE_DIR = DATA_DIR / "static_cache"
 DEPOT_FILE = DATA_DIR / "depots.json"
 # Route paths and stop geometry, snapshotted by segments.py so build_web can lay
-# the leg times out in order without reaching for R2.
-PATHS_FILE = DATA_DIR / "paths.json"
+# the leg times out in order without reaching for R2. One per month, from that
+# month's last timetable: a month's leg times are laid out along the routes it
+# actually ran, and a finished month keeps them when the timetable changes.
+PATHS_DIR = DATA_DIR / "paths"
+
+
+def paths_file(month: str) -> Path:
+    return PATHS_DIR / f"{month}.json"
 WEB_DATA_DIR = ROOT / "web" / "data"

@@ -74,9 +74,9 @@ direction of travel sweeps through three to five bins and would emit an arrow fo
 thicket rather than a road. So `build_web.py` folds each square's bins into at most two groups: the
 busiest bin leads, everything within 90° of it travels with it, the rest travel against it. That
 gives **1.55 directions per square**, and a curve's samples stop being split five ways. The fold is
-derived from the whole archive and never from one selection — do it per payload and the 08:00 view
-would group its bins differently from the all-hours view, and neither would line up with the global
-free-flow reference. A genuine three-way junction cell loses its turning traffic into one of the two
+derived from the whole month and never from one selection — do it per payload and the 08:00 view
+would group its bins differently from the all-hours view, and neither would line up with the
+month-wide free-flow reference. A genuine three-way junction cell loses its turning traffic into one of the two
 groups; at 25 m that is rare, and the alternative is the thicket.
 
 The viewer draws each one as an arrow pointing the way its traffic went, nudged half a cell to the
@@ -174,18 +174,19 @@ dropdown repaints without refetching.
 | Median | Ignores the tail of waits at lights; a better read on conditions, a worse one on delay. The map's default. |
 | Slow day (p15) / Fast day (p85) | The bad and good ends of the same distribution. |
 | Unreliability (p85 − p15) | How unpredictable a stretch is, which is not the same as how slow. |
-| **% of free-flow** | Median over that cell's *own* p85 across the whole archive. |
+| **% of free-flow** | Median over that cell's *own* p85 across the whole month. |
 
 The last one is the reason the others are not enough. Absolute speed tells you where the road is
 slow; it cannot tell you where there is congestion. Measured across the archive, a cell's median
 speed and its share of its own free-flow correlate at **r = 0.07** — they are very nearly
 independent. A narrow old-town lane doing 20 km/h at 03:00 is not congested; a ring road down to
-22 km/h from 40 is. The reference is global on purpose: derive it per selection and the colours
-shift meaninglessly as the slider moves. Cells whose reference is under `REL_MIN_FF_KMH` report
+22 km/h from 40 is. The reference spans the month on purpose: derive it per selection and the
+colours shift meaninglessly as the slider moves. It stops at the month so each month builds on its
+own, and a month of road works is measured against its own free flow. Cells whose reference is under `REL_MIN_FF_KMH` report
 nothing, because a ratio against a 5 km/h free-flow is noise over noise.
 
 Sample counts per cell: a single month at a single hour has a median of 5 samples and only 31% of
-cells at 15 or more, so the percentiles are firmest on the all-months views and on busy corridors —
+cells at 15 or more, so the percentiles are firmest on the all-hours views and on busy corridors —
 the popup shows the sample count behind every cell, alongside its speed hour by hour.
 
 ## How long the ride takes
@@ -296,29 +297,48 @@ the queue at its end. And the figures describe the buses that ran, not the timet
 
 ## Keeping it current
 
-Updating is manual, roughly monthly:
+A GitHub Actions job ([`.github/workflows/rebuild.yml`](.github/workflows/rebuild.yml)) runs at
+02:00 UTC on the 1st, 8th, 15th and 22nd. Ingest stops at yesterday, so the running month is always a
+whole number of weeks in, and the month picker says so: *September 2026 (1/4)*, *(1/2)*, *(3/4)*.
+The run on the 1st closes the month just finished, which from then on shows its day count like
+the rest. A running month with less than a week of data is left out of the menu.
+
+Each month is built on its own runner, from its own days only, so memory stays at one month's
+worth — about 4.5 GB — however long the archive grows. The heading fold, the depot mask and the
+free-flow reference are all taken from the month itself, so a finished month never has to be
+rebuilt because a later one arrived. Its map files are kept in R2 under `derived/web/YYYY-MM/`, and
+the deploy job gathers every month from there and writes `index.json`. A normal run therefore
+builds one month: the one still running.
+
+After changing the build, start the job by hand from the Actions tab with months `all` — every
+month then gets its own runner in parallel — or name the months, `2026-07 2026-08`. By hand locally:
 
 ```bash
-make update   # ingest the new days (speed cells and legs), rebuild, deploy
+make update   # ingest the new days (speed cells and legs), rebuild every month, deploy
 ```
 
-`make ingest` only reads days missing from `data/agg/` or `data/seg/`, so a month costs a few minutes even
-though the archive is 89 days deep. The map carries its own date range in the panel, so a stale
-deploy says so rather than pretending to be current.
+`make ingest` only reads days missing from `data/agg/` or `data/seg/`, so a week costs a few minutes
+locally, and a quarter of an hour on a runner. The map carries its own date range in the panel, so
+a stale deploy says so rather than pretending to be current.
 
-`data/` is git-ignored and is the only copy of ~330 MB that takes a couple of hours to rebuild from
-scratch. `speedmap.sync` can mirror it into the same bucket under `derived/agg/` and
-`derived/hist/`, which is worth doing before changing machines:
+`data/` is git-ignored and takes hours to rebuild from scratch. `speedmap.sync` mirrors it into the
+same bucket under `derived/` — the four per-day parquet directories, each month's route geometry
+and `depots.json`, without which the depot yards would count as street. The runners start empty and
+depend on this:
 
 ```bash
 make push     # upload aggregates missing remotely
 make pull     # download aggregates missing locally
 ```
 
-Both are deliberately off the `make update` path — on the machine that already holds `data/` there
-is nothing to fetch, and a first push is a 330 MB upload that should be a decision rather than a
-side effect. The parquets are immutable once written, so either direction is a filename comparison
-and nothing more.
+Both are off the local `make update` path — on the machine that already holds `data/` there is
+nothing to fetch. The parquets are immutable once written, so either direction is a filename
+comparison and nothing more. A local `make update` should be followed by `make push`, or the next
+runner re-ingests those days (harmless, just slow).
+
+The job needs these repository secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY` (as in `.env`), and `CLOUDFLARE_API_TOKEN` (a token with *Workers Scripts:
+Edit*) with `CLOUDFLARE_ACCOUNT_ID`.
 
 ## Setup
 
@@ -399,7 +419,7 @@ junction rather than the whole city:
 https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=rel&z=16&lat=49.8408&lon=24.0219
 ```
 
-`month` takes `all` or `YYYY-MM`; `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
+`month` takes `YYYY-MM` (an old `all` link falls back to the default); `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
 `stat` takes `v`, `med`, `p15`, `p85`, `spread` or `rel`. Anything unrecognised falls back to the
 default rather than erroring. With no query string the map opens on the newest month the data
 covers end to end, weekdays only. A link written before an axis existed still opens as it meant —

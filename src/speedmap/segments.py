@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from .config import (
-    PATHS_FILE,
+    paths_file,
     RUN_GAP_MAX_S,
     SEG_BIN_S,
     SEG_DIR,
@@ -310,6 +310,14 @@ def save(date_str: str, day: SegmentDay | None, started: float) -> bool:
     return True
 
 
+def paths_day(month: str) -> str | None:
+    """The day a month's paths were last snapshotted from, if they exist."""
+    target = paths_file(month)
+    if not target.exists():
+        return None
+    return json.loads(target.read_text(encoding="utf-8")).get("day")
+
+
 def write_paths(client, date_str: str) -> int:
     """Snapshot the schedule geometry the leg times are laid out along.
 
@@ -341,6 +349,7 @@ def write_paths(client, date_str: str) -> int:
             route["dist"] = [round(d) for d in distances]
         routes.append(route)
     payload = {
+        "day": date_str,
         "static_date": feed.static_date,
         "stops": {
             stop_id: [
@@ -353,7 +362,8 @@ def write_paths(client, date_str: str) -> int:
         },
         "routes": routes,
     }
-    PATHS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    target = paths_file(date_str[:7])
+    target.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, ensure_ascii=False)
-    write_atomic(PATHS_FILE, lambda p: p.write_text(body, encoding="utf-8"))
+    write_atomic(target, lambda p: p.write_text(body, encoding="utf-8"))
     return len(routes)

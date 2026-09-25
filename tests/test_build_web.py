@@ -11,6 +11,7 @@ from speedmap.build_web import (
     CELL_KEYS,
     CELL_SUMS,
     _medians,
+    _month_part,
     _payload,
     _percentile,
     _percentiles,
@@ -19,6 +20,8 @@ from speedmap.build_web import (
     daytype_of,
     free_flow,
     install_groups,
+    month_of,
+    month_window,
     regroup,
 )
 from speedmap.grid import heading_bin
@@ -364,3 +367,33 @@ def test_folded_histograms_follow_the_cells():
     out = regroup(hist, ["hour", *CELL_KEYS, "bin"])
     assert len(out) == 1
     assert out["n"].tolist() == [10]
+
+
+def test_running_month_reads_in_whole_weeks():
+    # Weekly runs land on the 8th, 15th and 22nd, so the data ends a day before.
+    assert _month_part("2026-09", "2026-09-07") == "1/4"
+    assert _month_part("2026-09", "2026-09-14") == "1/2"
+    assert _month_part("2026-09", "2026-09-21") == "3/4"
+    assert _month_part("2026-09", "2026-09-29") == "3/4"
+    assert _month_part("2026-09", "2026-09-03") == "0/4"
+
+
+def test_finished_month_has_no_part():
+    assert _month_part("2026-09", "2026-09-30") is None
+    assert _month_part("2026-08", "2026-09-14") is None
+    assert _month_part("2026-02", "2026-02-28") is None
+
+
+def test_month_window_takes_the_folder_either_side():
+    assert month_window("2026-03") == ("2026-02-28", "2026-04-01")
+    assert month_window("2026-12") == ("2026-11-30", "2027-01-01")
+
+
+def test_files_belong_to_their_month():
+    assert month_of("2026-07-wd-08.json") == "2026-07"
+    assert month_of("profile-2026-07-all.json") == "2026-07"
+    assert month_of("rides-2026-07-we-all.json") == "2026-07"
+    assert month_of("paths-2026-07.json") == "2026-07"
+    assert month_of("month-2026-07.json") == "2026-07"
+    assert month_of("all-wd-08.json") is None
+    assert month_of("paths.json") is None

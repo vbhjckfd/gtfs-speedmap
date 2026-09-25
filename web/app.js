@@ -352,7 +352,7 @@ function labelDaytypes() {
 
 // The newest month the data covers from its first day to its last. The month
 // still being collected is partial, and so is the one collection started in;
-// either would make a thin default. Falls back to all months.
+// either would make a thin default. Falls back to the newest month.
 function lastFullMonth() {
   const full = index.months.filter((m) => {
     const [y, mo] = m.key.split("-").map(Number);
@@ -360,7 +360,8 @@ function lastFullMonth() {
     const last = `${m.key}-${String(new Date(Date.UTC(y, mo, 0)).getUTCDate()).padStart(2, "0")}`;
     return first >= index.days.first && last <= index.days.last;
   });
-  return full.length ? full[full.length - 1].key : "all";
+  const pick = full.length ? full : index.months;
+  return pick[pick.length - 1].key;
 }
 
 function readUrl() {
@@ -712,6 +713,7 @@ function formatDuration(seconds) {
 // measured on the archived vehicles themselves, dwell and lights included.
 const RIDES = {
   paths: null,
+  pathsMonth: null,
   data: null,
   key: null,
   highlight: null,
@@ -1052,18 +1054,20 @@ function ridesReadout() {
 }
 
 // The route list and the geometry are only fetched once the ruler is used, and
-// the geometry only ever once — it does not change with the selection.
+// the geometry once per month — each month is laid out along its own timetable.
 async function loadRides() {
   const key = ridesKey();
   // Dragging a point redraws on every frame; without the flag each frame would
   // queue another pair of loads for the same selection.
   RIDES.loading = true;
   try {
+    const month = els.month.value;
     const [paths, data] = await Promise.all([
-      RIDES.paths ? RIDES.paths : fetchSelection("paths"),
+      RIDES.pathsMonth === month ? RIDES.paths : fetchSelection(`paths-${month}`),
       RIDES.key === key && RIDES.data ? RIDES.data : fetchSelection(key),
     ]);
     RIDES.paths = paths;
+    RIDES.pathsMonth = month;
     RIDES.data = data;
     RIDES.key = key;
   } finally {
@@ -1271,13 +1275,13 @@ async function boot() {
   for (const month of index.months) {
     const option = document.createElement("option");
     option.value = month.key;
-    option.textContent = `${month.label} (${month.days}d)`;
+    // The running month says how far through it the data reaches; a finished
+    // one says how many days it holds.
+    option.textContent = month.part
+      ? `${month.label} (${month.part})`
+      : `${month.label} (${month.days}d)`;
     els.month.append(option);
   }
-  const all = document.createElement("option");
-  all.value = "all";
-  all.textContent = `All months (${index.days.count}d)`;
-  els.month.append(all);
   els.month.value = lastFullMonth();
 
   for (const daytype of index.daytypes) {

@@ -1,29 +1,39 @@
 """Merge the per-day aggregates into the JSON the viewer loads.
 
-Emits one file per (month, daytype, hour) selection, with "all" rollups on
-every axis:
+Each month is built on its own, from its own days only, with "all" rollups on
+the day-type and hour axes:
 
     web/data/2026-07-wd-08.json       July weekdays, 08:00–08:59 local
     web/data/2026-07-all-all.json     July, every day, whole day
-    web/data/all-we-17.json           every month, weekends, 17:00–17:59
-    web/data/all-all-all.json         everything
-    web/data/profile-all-wd.json      per-cell speed by hour, for the popup
-    web/data/rides-all-wd-08.json     observed leg times per route, same selection
-    web/data/paths.json               route paths and stop geometry, once
+    web/data/profile-2026-07-wd.json  per-cell speed by hour, for the popup
+    web/data/rides-2026-07-wd-08.json observed leg times per route, same selection
+    web/data/paths-2026-07.json       July's route paths and stop geometry
+    web/data/month-2026-07.json       what the index needs to know about July
+
+and then, from the month-*.json summaries alone:
+
     web/data/index.json               menu contents, metrics, colour scales
+
+There is no all-months view. It was the only thing that needed every month in
+memory at once, and a month is the unit people compare.
 
 The ride files are written only when segments.py has produced leg times; the
 speed map predates them and still builds without them.
 
-Run: python -m speedmap.build_web
+Run:
+    python -m speedmap.build_web                       every month on disk, then the index
+    python -m speedmap.build_web --month 2026-07 --no-index
+    python -m speedmap.build_web --index               from months already built
 """
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
+import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -38,7 +48,6 @@ from .config import (
     HIST_BIN_KMH,
     HIST_DIR,
     MIN_SAMPLES,
-    PATHS_FILE,
     SEG_BIN_S,
     SEG_DIR,
     SEG_HIST_DIR,
@@ -57,6 +66,7 @@ from .config import (
     TERMINAL_RADIUS_M,
     TZ,
     WEB_DATA_DIR,
+    paths_file,
 )
 
 MPS_TO_KMH = 3.6
@@ -99,8 +109,8 @@ METRICS = [
     {"key": "v", "label": "Average", "unit": "km/h"},
     {"key": "med", "label": "Median", "unit": "km/h"},
     {"key": "p15", "label": "Slow day (p15)", "unit": "km/h"},
-    # Not called "free-flow": that name belongs to the global reference behind
-    # `rel`, and this one is the p85 of the selection on screen.
+    # Not called "free-flow": that name belongs to the month-wide reference
+    # behind `rel`, and this one is the p85 of the selection on screen.
     {"key": "p85", "label": "Fast day (p85)", "unit": "km/h"},
     {
         "key": "rel",
@@ -149,21 +159,51 @@ def _slice_key(day: str, month: str) -> tuple[str, str]:
     return month, daytype_of(day)
 
 
-def load_base_slices() -> tuple[dict, dict, list[str]]:
-    """Read every per-day aggregate once, bucketed into (month, daytype) slices.
+# How many day parts a slice collects before they are summed into one. Holding
+# every day until the end made peak memory grow with the archive (6 GB at 136
+# days); summing as it goes bounds it by the slices themselves.
+FOLD_EVERY = 7
+
+
+def _fold_into(
+    store: dict, key: tuple[str, str], part: pd.DataFrame, keys: list[str], sums: list[str]
+) -> None:
+    """Add one day's part to a slice, summing the pending parts down when due."""
+    parts = store.setdefault(key, [])
+    parts.append(part)
+    if len(parts) >= FOLD_EVERY:
+        store[key] = [_sum_parts(parts, keys, sums)]
+
+
+def _sum_parts(parts: list[pd.DataFrame], keys: list[str], sums: list[str]) -> pd.DataFrame:
+    return (
+        pd.concat(parts, ignore_index=True)
+        .groupby(keys, as_index=False, sort=False)[sums]
+        .sum()
+    )
+
+
+def _month_paths(directory, month: str) -> list:
+    """The day files that can hold rows of `month`, the folder either side included."""
+    first, last = month_window(month)
+    return sorted(p for p in directory.glob("*.parquet") if first <= p.stem <= last)
+
+
+def load_base_slices(month: str) -> tuple[dict, dict, list[str]]:
+    """Read one month's per-day aggregates, bucketed into (month, daytype) slices.
 
     Only the 8-ish base slices are held; every rollup the viewer offers is a sum
     of these. Grouping each bucket down as it is finished keeps peak memory near
     what a single full load costs today rather than multiplying it by the new
     axis.
     """
-    paths = sorted(AGG_DIR.glob("*.parquet"))
+    paths = _month_paths(AGG_DIR, month)
     if not paths:
-        raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest` first")
+        raise SystemExit(f"no aggregates for {month} in {AGG_DIR} — run `make ingest` first")
 
     cell_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
     hist_parts: dict[tuple[str, str], list[pd.DataFrame]] = {}
-    days = [p.stem for p in paths]
+    days = [p.stem for p in paths if p.stem.startswith(month)]
 
     for path in paths:
         day = path.stem
@@ -178,22 +218,23 @@ def load_base_slices() -> tuple[dict, dict, list[str]]:
         # A day file is almost entirely one month, but the local-time
         # conversion can push a few rows over a month boundary, so split on the
         # column rather than assuming.
-        for month, part in cells.groupby("month", sort=False):
-            cell_parts.setdefault(_slice_key(day, month), []).append(part)
+        cells = cells[cells["month"] == month]
+        if not cells.empty:
+            _fold_into(cell_parts, _slice_key(day, month), cells, ["hour", *CELL_KEYS], CELL_SUMS)
         if hist is not None:
-            for month, part in hist.groupby("month", sort=False):
-                hist_parts.setdefault(_slice_key(day, month), []).append(part)
+            hist = hist[hist["month"] == month]
+            if not hist.empty:
+                _fold_into(
+                    hist_parts, _slice_key(day, month), hist, ["hour", *CELL_KEYS, "bin"], ["n"]
+                )
+        del cells, hist
 
     cell_slices = {
-        key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *CELL_KEYS], as_index=False, sort=False)[CELL_SUMS]
-        .sum()
+        key: _sum_parts(parts, ["hour", *CELL_KEYS], CELL_SUMS)
         for key, parts in cell_parts.items()
     }
     hist_slices = {
-        key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *CELL_KEYS, "bin"], as_index=False, sort=False)["n"]
-        .sum()
+        key: _sum_parts(parts, ["hour", *CELL_KEYS, "bin"], ["n"])
         for key, parts in hist_parts.items()
     }
     return cell_slices, hist_slices, days
@@ -270,8 +311,8 @@ def _medians(bins: pd.DataFrame) -> pd.Series:
 def free_flow(hist_slices: dict) -> pd.Series:
     """Each cell's free-flow reference: its p85 over every hour and day type.
 
-    Collapsing hour and bin before summing keeps this far smaller than the
-    all-months slice it is derived from.
+    Collapsing hour before summing keeps this far smaller than the slices it
+    is derived from.
     """
     parts = [
         frame.groupby([*CELL_KEYS, "bin"], as_index=False, sort=False)["n"].sum()
@@ -303,10 +344,10 @@ def free_flow(hist_slices: dict) -> pd.Series:
 # it. 2.59 arrows per square becomes 1.46, and a curve's samples stop being
 # split five ways.
 #
-# The fold is a property of the square across the whole archive, never of one
+# The fold is a property of the square across the whole month, never of one
 # selection. Derive it per payload and the 08:00 view would group its bins
 # differently from the all-hours view, and neither would line up with the
-# free-flow reference, which is global by construction.
+# free-flow reference, which spans the month too.
 _GROUPS: dict[tuple[int, int, int], int] | None = None
 
 
@@ -541,17 +582,18 @@ SEG_KEYS = ["route_id", "direction", "from_stop", "to_stop"]
 SEG_SUMS = ["n", "sum_s"]
 
 
-def load_ride_slices() -> tuple[dict, dict, list[dict], dict]:
-    """Observed leg times, bucketed into the same (month, daytype) slices.
+def load_ride_slices(month: str) -> tuple[dict, dict, list[dict], dict]:
+    """One month's observed leg times, bucketed into the same (month, daytype) slices.
 
     Returns empty structures when segments.py has not run — the speed map is
     the older half of this build and must not depend on the newer one.
     """
-    paths_payload = json.loads(PATHS_FILE.read_text(encoding="utf-8")) if PATHS_FILE.exists() else {}
+    source = paths_file(month)
+    paths_payload = json.loads(source.read_text(encoding="utf-8")) if source.exists() else {}
     paths = paths_payload.get("routes", [])
     stops = paths_payload.get("stops", {})
 
-    leg_paths = sorted(SEG_DIR.glob("*.parquet")) if SEG_DIR.exists() else []
+    leg_paths = _month_paths(SEG_DIR, month) if SEG_DIR.exists() else []
     if not leg_paths or not paths:
         return {}, {}, paths, stops
 
@@ -561,22 +603,23 @@ def load_ride_slices() -> tuple[dict, dict, list[dict], dict]:
         day = path.stem
         legs = pd.read_parquet(path)
         hist_path = SEG_HIST_DIR / path.name
-        for month, part in legs.groupby("month", sort=False):
-            leg_parts.setdefault(_slice_key(day, month), []).append(part)
+        legs = legs[legs["month"] == month]
+        if not legs.empty:
+            _fold_into(leg_parts, _slice_key(day, month), legs, ["hour", *SEG_KEYS], SEG_SUMS)
         if hist_path.exists():
-            for month, part in pd.read_parquet(hist_path).groupby("month", sort=False):
-                bin_parts.setdefault(_slice_key(day, month), []).append(part)
+            bins = pd.read_parquet(hist_path)
+            bins = bins[bins["month"] == month]
+            if not bins.empty:
+                _fold_into(
+                    bin_parts, _slice_key(day, month), bins, ["hour", *SEG_KEYS, "bin"], ["n"]
+                )
+        del legs
 
     leg_slices = {
-        key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *SEG_KEYS], as_index=False, sort=False)[SEG_SUMS]
-        .sum()
-        for key, parts in leg_parts.items()
+        key: _sum_parts(parts, ["hour", *SEG_KEYS], SEG_SUMS) for key, parts in leg_parts.items()
     }
     bin_slices = {
-        key: pd.concat(parts, ignore_index=True)
-        .groupby(["hour", *SEG_KEYS, "bin"], as_index=False, sort=False)["n"]
-        .sum()
+        key: _sum_parts(parts, ["hour", *SEG_KEYS, "bin"], ["n"])
         for key, parts in bin_parts.items()
     }
     return leg_slices, bin_slices, paths, stops
@@ -635,47 +678,61 @@ def _rides(legs: pd.DataFrame, bins: pd.DataFrame, paths: list[dict]) -> dict:
     return out
 
 
-_WRITTEN: set[str] = set()
-
-
 def _write(name: str, obj) -> int:
     path = WEB_DATA_DIR / f"{name}.json"
     text = json.dumps(obj, separators=(",", ":"))
     path.write_text(text, encoding="utf-8")
-    _WRITTEN.add(path.name)
     return len(text)
 
 
-def _sweep() -> int:
-    """Delete payloads left by an earlier build under a different naming scheme.
+def month_window(month: str) -> tuple[str, str]:
+    """First and last UTC day folder that can hold rows of a local month.
 
-    The deploy uploads whatever is in web/data, so stale files would ship —
-    and a viewer that still had an old URL cached would silently get old data.
+    Day folders are named by UTC date and rows carry the local month, so the
+    folder either side of a month can spill a few rows into it.
     """
-    stale = [p for p in WEB_DATA_DIR.glob("*.json") if p.name not in _WRITTEN]
-    for path in stale:
-        path.unlink()
-    return len(stale)
+    year, mon = int(month[:4]), int(month[5:7])
+    first = date(year, mon, 1)
+    last = date(year, mon, calendar.monthrange(year, mon)[1])
+    return (first - timedelta(days=1)).isoformat(), (last + timedelta(days=1)).isoformat()
 
 
-def build() -> None:
-    cell_slices, hist_slices, days = load_base_slices()
-    leg_slices, seg_bin_slices, paths, stops = load_ride_slices()
+def _month_part(month: str, last_day: str) -> str | None:
+    """How much of a still-running month the data covers, in whole weeks.
+
+    None for a finished month. Weekly runs land on the 8th, 15th and 22nd, so
+    the running month reads 1/4, 1/2 and 3/4 of the way through; "0/4" means
+    less than a week, too thin to show.
+    """
+    year, mon = int(month[:4]), int(month[5:7])
+    if last_day[:7] != month or int(last_day[8:]) >= calendar.monthrange(year, mon)[1]:
+        return None
+    return {0: "0/4", 1: "1/4", 2: "1/2"}.get(int(last_day[8:]) // 7, "3/4")
+
+
+def month_of(name: str) -> str | None:
+    """The month a web/data file belongs to, from its name."""
+    match = re.search(r"\d{4}-\d{2}(?!-\d)", name)
+    return match.group(0) if match else None
+
+
+def build_month(month: str) -> dict:
+    """Write one month's files. Every month stands on its own.
+
+    The heading fold, the depot mask and the free-flow reference are all
+    derived from the month's own data, so a finished month is built once and
+    never has to be rebuilt because a later one arrived — which is what lets
+    each month run on its own machine.
+    """
+    cell_slices, hist_slices, days = load_base_slices(month)
+    leg_slices, seg_bin_slices, paths, stops = load_ride_slices(month)
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    written: set[str] = set()
 
-    months = sorted({month for month, _ in cell_slices})
     hours = sorted({int(h) for frame in cell_slices.values() for h in frame["hour"].unique()})
-    days_per_month: dict[str, int] = {}
-    days_per_type: dict[str, int] = {ALL: len(days)}
-    # Per month too, so the day picker can say how many weekdays the chosen
-    # month holds rather than how many the whole archive does.
-    types_per_month: dict[str, dict[str, int]] = {}
+    types: dict[str, int] = {}
     for day in days:
-        days_per_month[day[:7]] = days_per_month.get(day[:7], 0) + 1
-        kind = daytype_of(day)
-        days_per_type[kind] = days_per_type.get(kind, 0) + 1
-        counts = types_per_month.setdefault(day[:7], {})
-        counts[kind] = counts.get(kind, 0) + 1
+        types[daytype_of(day)] = types.get(daytype_of(day), 0) + 1
 
     # Fold the heading bins down before anything is derived from them, so the
     # arrows, the percentiles and the free-flow reference are all folded the
@@ -687,62 +744,111 @@ def build() -> None:
     hist_slices = {
         key: regroup(frame, ["hour", *CELL_KEYS, "bin"]) for key, frame in hist_slices.items()
     }
-    print(
-        f"{binned:,} heading bins over {squares:,} squares folded into {folded:,} "
-        f"directions of travel ({folded / squares:.2f} per square)"
-    )
-
     masked = install_mask(cell_slices)
     ff = free_flow(hist_slices)
     print(
-        f"{masked:,} cells masked by {len(mask_zones())} depot zone(s); "
-        f"free-flow reference for {len(ff):,} cells (p{FREE_FLOW_Q * 100:.0f})"
+        f"{month}: {binned:,} heading bins over {squares:,} squares folded into {folded:,}; "
+        f"{masked:,} cells masked; free-flow reference for {len(ff):,} cells "
+        f"(p{FREE_FLOW_Q * 100:.0f})",
+        flush=True,
     )
 
     total_bytes = 0
-    file_count = 0
-    for month in [*months, ALL]:
-        for daytype in [*DAYTYPES, ALL]:
-            selection = _combine(cell_slices, month, daytype, ["hour", *CELL_KEYS])
-            bins = _combine(hist_slices, month, daytype, ["hour", *CELL_KEYS, "bin"])
+
+    def write(name: str, obj) -> None:
+        nonlocal total_bytes
+        total_bytes += _write(name, obj)
+        written.add(f"{name}.json")
+
+    for daytype in [*DAYTYPES, ALL]:
+        selection = _combine(cell_slices, month, daytype, ["hour", *CELL_KEYS])
+        bins = _combine(hist_slices, month, daytype, ["hour", *CELL_KEYS, "bin"])
+        for hour in [*hours, ALL]:
+            if hour == ALL:
+                part, part_bins = selection, bins
+            else:
+                part = selection[selection["hour"] == hour]
+                part_bins = bins[bins["hour"] == hour]
+            hour_key = ALL if hour == ALL else f"{hour:02d}"
+            write(f"{month}-{daytype}-{hour_key}", _payload(part, part_bins, ff))
+        write(f"profile-{month}-{daytype}", _profile(selection, hours))
+        del selection, bins
+
+        if leg_slices:
+            legs = _combine_rides(leg_slices, month, daytype, ["hour", *SEG_KEYS])
+            seg_bins = _combine_rides(seg_bin_slices, month, daytype, ["hour", *SEG_KEYS, "bin"])
             for hour in [*hours, ALL]:
                 if hour == ALL:
-                    part, part_bins = selection, bins
+                    part, part_bins = legs, seg_bins
                 else:
-                    part = selection[selection["hour"] == hour]
-                    part_bins = bins[bins["hour"] == hour]
+                    part = legs[legs["hour"] == hour]
+                    part_bins = seg_bins[seg_bins["hour"] == hour]
                 hour_key = ALL if hour == ALL else f"{hour:02d}"
-                total_bytes += _write(
-                    f"{month}-{daytype}-{hour_key}", _payload(part, part_bins, ff)
-                )
-                file_count += 1
-            total_bytes += _write(f"profile-{month}-{daytype}", _profile(selection, hours))
-            file_count += 1
-            del selection, bins
+                write(f"rides-{month}-{daytype}-{hour_key}", _rides(part, part_bins, paths))
+            del legs, seg_bins
 
-            if leg_slices:
-                legs = _combine_rides(leg_slices, month, daytype, ["hour", *SEG_KEYS])
-                seg_bins = _combine_rides(
-                    seg_bin_slices, month, daytype, ["hour", *SEG_KEYS, "bin"]
-                )
-                for hour in [*hours, ALL]:
-                    if hour == ALL:
-                        part, part_bins = legs, seg_bins
-                    else:
-                        part = legs[legs["hour"] == hour]
-                        part_bins = seg_bins[seg_bins["hour"] == hour]
-                    hour_key = ALL if hour == ALL else f"{hour:02d}"
-                    total_bytes += _write(
-                        f"rides-{month}-{daytype}-{hour_key}", _rides(part, part_bins, paths)
-                    )
-                    file_count += 1
-                del legs, seg_bins
+    if leg_slices:
+        # Geometry is the same whatever day type or hour is on screen, so it
+        # ships once per month and the selection files carry only numbers.
+        write(f"paths-{month}", {"stops": stops, "routes": paths})
 
-    if paths:
-        # Geometry is the same whatever selection is on screen, so it ships once
-        # and the per-selection files carry nothing but numbers.
-        total_bytes += _write("paths", {"stops": stops, "routes": paths})
-        file_count += 1
+    meta = {
+        "key": month,
+        "days": days,
+        "daytypes": {ALL: len(days), **{key: types.get(key, 0) for key in DAYTYPES}},
+        "hours": hours,
+        "samples": int(sum(int(f["n"].sum()) for f in cell_slices.values())),
+        "routes": len(paths) if leg_slices else 0,
+    }
+    write(f"month-{month}", meta)
+
+    stale = [
+        p for p in WEB_DATA_DIR.glob("*.json") if month_of(p.name) == month and p.name not in written
+    ]
+    for path in stale:
+        path.unlink()
+    print(
+        f"{month}: {len(written)} files, {total_bytes / 1e6:.1f} MB, {len(days)} days, "
+        f"{meta['samples']:,} samples"
+        + (f", {len(stale)} stale file(s) removed" if stale else ""),
+        flush=True,
+    )
+    return meta
+
+
+def write_index() -> dict:
+    """Assemble index.json from the months already built into web/data.
+
+    Reads only the small month-*.json summaries, so it runs anywhere the built
+    months have been gathered, without the aggregates behind them.
+    """
+    metas = sorted(
+        (json.loads(p.read_text(encoding="utf-8")) for p in WEB_DATA_DIR.glob("month-*.json")),
+        key=lambda m: m["key"],
+    )
+    metas = [m for m in metas if m["days"]]
+    if not metas:
+        raise SystemExit(f"no months built in {WEB_DATA_DIR} — run a month build first")
+    days = sorted(day for m in metas for day in m["days"])
+    last = days[-1]
+
+    months = []
+    for meta in metas:
+        part = _month_part(meta["key"], last)
+        if part == "0/4":
+            print(f"{meta['key']}: under a week of data, left out of the menu")
+            continue
+        months.append(
+            {
+                "key": meta["key"],
+                "label": f"{MONTH_NAMES[int(meta['key'][5:7]) - 1]} {meta['key'][:4]}",
+                "days": len(meta["days"]),
+                "part": part,
+                "daytypes": meta["daytypes"],
+            }
+        )
+    shown = {m["key"] for m in months}
+    rides = any(m["routes"] for m in metas if m["key"] in shown)
 
     index = {
         "generated": date.today().isoformat(),
@@ -759,12 +865,12 @@ def build() -> None:
         "free_flow_q": FREE_FLOW_Q,
         # Absent until segments.py has run, which is what the viewer keys the
         # whole ride-time feature off.
-        "rides": bool(leg_slices)
+        "rides": rides
         and {
             "stop_pass_radius_m": STOP_PASS_RADIUS_M,
             "min_observations": SEG_MIN_OBS,
             "bin_s": SEG_BIN_S,
-            "routes": len(paths),
+            "routes": max(m["routes"] for m in metas if m["key"] in shown),
             # Average first, and the default: only the mean is additive, so a
             # journey summed from per-leg medians comes out short. Measured on
             # Рясне-2 → Ковча at 08:00 over ten legs, summed medians said 22
@@ -776,42 +882,65 @@ def build() -> None:
         },
         # Kept for viewers built before per-metric scales existed.
         "scale": {"low_kmh": SCALE_LOW_KMH, "high_kmh": SCALE_HIGH_KMH},
-        "hours": hours,
-        "days": {"count": len(days), "first": days[0], "last": days[-1]},
-        "samples": int(sum(int(f["n"].sum()) for f in cell_slices.values())),
-        "months": [
-            {
-                "key": month,
-                "label": f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[:4]}",
-                "days": days_per_month.get(month, 0),
-                "daytypes": {
-                    ALL: days_per_month.get(month, 0),
-                    **{key: types_per_month.get(month, {}).get(key, 0) for key in DAYTYPES},
-                },
-            }
-            for month in months
-        ],
+        "hours": sorted({h for m in metas for h in m["hours"]}),
+        "days": {"count": len(days), "first": days[0], "last": last},
+        "samples": sum(m["samples"] for m in metas if m["key"] in shown),
+        "months": months,
         "daytypes": [
-            {"key": key, "label": DAYTYPE_LABELS[key], "days": days_per_type.get(key, 0)}
+            {
+                "key": key,
+                "label": DAYTYPE_LABELS[key],
+                "days": sum(m["daytypes"][key] for m in metas if m["key"] in shown),
+            }
             for key in (ALL, *DAYTYPES)
         ],
     }
     _write("index", index)
-    swept = _sweep()
 
+    # Anything not owned by a built month is left over from an older layout —
+    # the all-months rollups, the single paths.json — and would otherwise ship.
+    built = {m["key"] for m in metas}
+    stale = [
+        p
+        for p in WEB_DATA_DIR.glob("*.json")
+        if p.name != "index.json" and month_of(p.name) not in built
+    ]
+    for path in stale:
+        path.unlink()
     print(
-        f"{file_count} data files, {total_bytes / 1e6:.1f} MB total"
-        + (f", {swept} stale file(s) removed" if swept else "")
-        + "\n"
-        f"{len(days)} days ({days[0]} … {days[-1]}), "
-        f"{index['samples']:,} samples, months: {', '.join(months)}, "
-        f"{days_per_type.get('wd', 0)} weekdays / {days_per_type.get('we', 0)} weekend days"
+        f"index: {', '.join(m['key'] + (f' ({m['part']})' if m['part'] else '') for m in months)}; "
+        f"{len(days)} days ({days[0]} … {last}), {index['samples']:,} samples"
+        + (f", {len(stale)} stale file(s) removed" if stale else "")
     )
+    return index
+
+
+def available_months() -> list[str]:
+    """Every month with at least one day of aggregates on disk."""
+    return sorted({p.stem[:7] for p in AGG_DIR.glob("*.parquet")})
 
 
 def main(argv: list[str] | None = None) -> int:
-    argparse.ArgumentParser(description=__doc__).parse_args(argv)
-    build()
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--month",
+        action="append",
+        help="YYYY-MM to build (repeatable); default every month on disk",
+    )
+    ap.add_argument("--index", action="store_true", help="only rewrite index.json")
+    ap.add_argument(
+        "--no-index", action="store_true", help="build the months but leave index.json alone"
+    )
+    args = ap.parse_args(argv)
+
+    if not args.index:
+        months = args.month or available_months()
+        if not months:
+            raise SystemExit(f"no aggregates in {AGG_DIR} — run `make ingest` first")
+        for month in months:
+            build_month(month)
+    if not args.no_index:
+        write_index()
     return 0
 
 
