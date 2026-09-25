@@ -13,7 +13,7 @@ CAFFEINATE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -
 NVM_SH := $(or $(NVM_DIR),$(HOME)/.nvm)/nvm.sh
 NODE := $(shell test -s "$(NVM_SH)" && echo '. "$(NVM_SH)" && nvm use --silent &&')
 
-.PHONY: help ingest build serve test deploy update pull push
+.PHONY: help ingest build serve test deploy deploy-data update pull push
 
 help:
 	@echo "make ingest                   read every finished day in R2 into data/ (resumable)"
@@ -24,7 +24,8 @@ help:
 	@echo "make build ARGS='--month 2026-07'   just that month, then the index"
 	@echo "make serve                    serve web/ on http://localhost:8000"
 	@echo "make test                     run unit tests"
-	@echo "make deploy                   build, then publish web/ as a Cloudflare Worker"
+	@echo "make deploy                   publish web/ as it stands: code changes, no rebuild"
+	@echo "make deploy-data              build every month first, then publish"
 	@echo "make update                   ingest new days, then deploy"
 	@echo "make pull                     optional: download aggregates from R2"
 	@echo "make push                     optional: back up aggregates to R2"
@@ -43,13 +44,21 @@ serve:
 test:
 	$(PY) -m pytest -q
 
-deploy: build
+# Code only: no rebuild. The Worker is assets-only and every version is the
+# whole of web/, so the data still ships — but as the files already on disk,
+# and Wrangler skips uploading any whose hash the edge already holds. Without
+# web/data/ a deploy would take the live data down, so it refuses.
+deploy:
+	@test -s web/data/index.json || { echo "web/data/index.json missing: run make deploy-data, or python -m speedmap.sync pull-web"; exit 1; }
 	$(NODE) npx wrangler deploy
+
+deploy-data: build
+	$(MAKE) deploy
 
 # Sequenced in the recipe, not as prerequisites, so `make -j` cannot start the
 # build before the new days are on disk; ARGS are the ingest's, not the build's.
 update: ingest
-	$(MAKE) deploy ARGS=
+	$(MAKE) deploy-data ARGS=
 
 # Off the `update` path on purpose: a monthly run on the machine that already
 # holds data/ has nothing to fetch, and a first push is a 330 MB upload that

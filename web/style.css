@@ -243,6 +243,11 @@ input[type="range"] {
   text-align: right;
 }
 
+.ride-delta {
+  color: #b5462f;
+  font-size: 11px;
+}
+
 .ride-detail {
   grid-column: 1 / -1;
   font-size: 10px;
@@ -365,9 +370,11 @@ input[type="range"] {
 }
 
 @media (max-width: 560px) {
+  /* Short of the right edge: the zoom buttons and the ride-time toggle live
+     there, and a full-width panel buries them. */
   .panel {
     width: auto;
-    right: 12px;
+    right: 56px;
   }
 
   /* The panel now spans the window, so the ruler drops to the bottom edge. */

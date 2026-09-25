@@ -267,7 +267,10 @@ Routes are listed fastest first, each with the stops it boards and alights at an
 figure rests on. A leg nobody was seen running in that selection is filled with the route's own
 average leg and the row says how many of them were. Picking a route draws the stretch being timed.
 
-### Why the average is the default
+Beside each time sits how much longer it takes than off-peak: the quickest hour of the same month
+and day type over the same stretch, on the same statistic, among hours with at least 10 rides seen.
+
+### Why the average is offered beside the median
 
 Only the mean is additive. The sum of a route's per-leg means is the mean of the whole ride; the
 sum of its per-leg medians is **not** the median of the ride, because leg times are right-skewed and
@@ -287,8 +290,8 @@ The summed mean lands within about 5% of the real journey; the summed median run
 The residual on the mean is legs the run never produced a pass pair for — 13% of А06's legs, which
 is 19% of its clock — filled in from other runs.
 
-The median is still offered, because for a *single* leg it is the more robust figure. It is the sum
-that misleads.
+The ruler still opens on the median, matching the map, because for a *single* leg it is the more
+robust figure. It is the sum that misleads — switch to the average for a long ride.
 
 Three things it does not claim. It does not know when the next bus leaves, so waiting time is
 absent and a route running every 40 minutes reads the same as one every 6. A part-leg is priced by
@@ -356,12 +359,16 @@ make ingest DATE=2026-07-15   # one day
 make build                    # merge into web/data/*.json
 make serve                    # http://localhost:8000
 make test
-make deploy                   # build + publish as a Cloudflare Worker (Node from .nvmrc via nvm)
+make deploy                   # publish web/ as it stands, no rebuild (Node from .nvmrc via nvm)
+make deploy-data              # build every month, then publish
 make update                   # ingest new days, then deploy
 ```
 
 `web/data/*.json` is generated and git-ignored, so the deploy uploads whatever the last `make build`
-produced. `make deploy` runs `build` first to keep those in step.
+produced. `make deploy` is for code: it skips the build and ships `web/data/` as it is on disk —
+Wrangler only uploads files the edge does not already hold — and refuses when `web/data/index.json`
+is missing, since an assets-only deploy without it would take the live data down. `make deploy-data`
+runs `build` first; `make update` uses it.
 
 `make ingest` reads each day's ~245 MB of snapshots once and feeds both passes — the speed cells
 (`aggregate.py`) and the leg times (`segments.py`) — and only for a pass whose output is missing.

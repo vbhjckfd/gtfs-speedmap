@@ -8,6 +8,9 @@
 
 const DATA = "data";
 const LVIV = [49.8397, 24.0297];
+// The network with a margin round it. A shared link outside it is a typo, not
+// a view, and panning past it only finds blank map.
+const BOUNDS = L.latLngBounds([49.55, 23.6], [50.1, 24.45]);
 const DOT_MIN_PX = 2.0;
 // Below this an arrowhead is a smudge, so the zoomed-out map keeps its dots:
 // at zoom 13 a 25 m cell is under two pixels across and no shape drawn in it
@@ -118,7 +121,12 @@ function paintLegend() {
 
 // The panel occupies the top-left corner, where Leaflet puts the zoom buttons
 // by default.
-const map = L.map("map", { preferCanvas: true, zoomControl: false }).setView(LVIV, 13);
+const map = L.map("map", {
+  preferCanvas: true,
+  zoomControl: false,
+  maxBounds: BOUNDS,
+  minZoom: 10,
+}).setView(LVIV, 13);
 L.control.zoom({ position: "topright" }).addTo(map);
 
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -380,8 +388,17 @@ function readUrl() {
   const zoom = Number(params.get("z"));
   const lat = Number(params.get("lat"));
   const lon = Number(params.get("lon"));
-  if (Number.isFinite(zoom) && Number.isFinite(lat) && Number.isFinite(lon) && params.get("z")) {
-    map.setView([lat, lon], zoom);
+  if (
+    params.get("z") &&
+    Number.isFinite(zoom) &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    BOUNDS.contains([lat, lon])
+  ) {
+    // Not animated: render() writes the URL straight after this, and mid-
+    // animation the map still reports the old view, which would overwrite the
+    // link's own viewport with the default one.
+    map.setView([lat, lon], Math.min(19, Math.max(10, zoom)), { animate: false });
   }
 
   const hour = params.get("hour");
@@ -441,11 +458,15 @@ async function render() {
   try {
     const payload = await fetchSelection(key);
     if (seq !== requestSeq) return; // a newer selection won
+    // An open popup describes one cell of the old selection; its figures and
+    // its highlighted hour are wrong for the new one.
+    if (payload !== current) map.closePopup();
     current = payload;
     dots.redraw();
     els.subtitle.textContent = describe(payload.lat.length);
   } catch (err) {
     if (seq !== requestSeq) return;
+    map.closePopup();
     current = null;
     dots.redraw();
     els.subtitle.textContent = `no data for this selection (${err.message})`;
@@ -625,25 +646,25 @@ async function cellProfile(latlng, heading) {
   return sparkline(values, profile.hours, selected);
 }
 
-function popupContent(i, spark) {
+function popupContent(source, i, spark) {
   const metric = activeMetric();
-  const value = speedValues()[i];
+  const value = speedValues(source)[i];
   const rows = index.metrics
-    .filter((m) => m.key !== metric.key && current[m.key])
-    .map((m) => `<span>${m.label}</span><span>${format(current[m.key][i], m)} ${m.unit}</span>`)
+    .filter((m) => m.key !== metric.key && source[m.key])
+    .map((m) => `<span>${m.label}</span><span>${format(source[m.key][i], m)} ${m.unit}</span>`)
     .join("");
   // Every figure in here is for one direction of travel only, which is the
   // whole point of splitting them: the approach to a junction and the run out
   // of it are different roads at rush hour.
-  const heading = Array.isArray(current.dir)
-    ? `<div class="stat-label">traffic heading ${compass(current.dir[i])} · ` +
-      `${Math.round(current.dir[i])}°</div>`
+  const heading = Array.isArray(source.dir)
+    ? `<div class="stat-label">traffic heading ${compass(source.dir[i])} · ` +
+      `${Math.round(source.dir[i])}°</div>`
     : "";
   return (
     `<div class="cell-popup"><b>${format(value, metric)} ${metric.unit}</b>` +
     `<div class="stat-label">${metric.label}</div>${heading}` +
     `<div class="stats">${rows}` +
-    `<span>Samples</span><span>${current.n[i].toLocaleString()}</span></div>` +
+    `<span>Samples</span><span>${source.n[i].toLocaleString()}</span></div>` +
     `<div class="spark-slot">${spark}</div></div>`
   );
 }
@@ -654,16 +675,19 @@ map.on("click", (e) => {
     return;
   }
   if (!current) return;
+  // Held for the profile callback below: by the time it lands the slider may
+  // have moved, and an index into the new payload is a different cell.
+  const source = current;
   // A fixed metre tolerance is unclickable when zoomed in and grabs the wrong
   // cell when zoomed out, so allow a constant ~12 px of slop instead.
   const tolerance = Math.max(index.cell_size_m, metresPerPixel() * 12);
-  const hit = nearestArrow(current, e.latlng, tolerance);
+  const hit = nearestArrow(source, e.latlng, tolerance);
   if (hit.index < 0 || hit.distance > tolerance) return;
 
-  const at = L.latLng(current.lat[hit.index], current.lon[hit.index]);
+  const at = L.latLng(source.lat[hit.index], source.lon[hit.index]);
   const popup = L.popup()
     .setLatLng(at)
-    .setContent(popupContent(hit.index, "speed by hour…"))
+    .setContent(popupContent(source, hit.index, "speed by hour…"))
     .openOn(map);
 
   // The profile file is a megabyte or so, so it loads on the first click and is
@@ -671,10 +695,10 @@ map.on("click", (e) => {
   // back through setContent rather than patching the DOM — Leaflet re-renders
   // the popup from the string it was given, so a patched node is wiped on the
   // next update and the popup never resizes around it.
-  cellProfile(at, Array.isArray(current.dir) ? current.dir[hit.index] : null)
+  cellProfile(at, Array.isArray(source.dir) ? source.dir[hit.index] : null)
     .then((svg) => {
       if (map.hasLayer(popup)) {
-        popup.setContent(popupContent(hit.index, svg || "no hourly profile here"));
+        popup.setContent(popupContent(source, hit.index, svg || "no hourly profile here"));
       }
     })
     .catch(() => {});
@@ -716,6 +740,10 @@ const RIDES = {
   highlight: null,
   loading: false,
   expanded: false,
+  // Every hour of the same month and day type, for the off-peak comparison.
+  hourly: null,
+  hourlyKey: null,
+  hourlyLoading: false,
 };
 
 // How far a clicked point may be from the route's own line before that route is
@@ -728,17 +756,48 @@ const RIDE_NEAR_M = 150;
 const RIDE_DETOUR_MAX = 2.0;
 const RULER_PANE = "rulerPane";
 const RIDE_ROWS = 4;
+// An hour counts as a stretch's off-peak only on this many rides: a quiet
+// 05:00 with three buses in it is a lucky draw, not the road at its emptiest.
+const OFFPEAK_MIN_RIDES = 10;
 
 function ridesKey() {
   return `rides-${els.month.value}-${els.daytype.value}-${hourKey()}`;
 }
 
+function hourlyKey() {
+  return `${els.month.value}-${els.daytype.value}`;
+}
+
+/**
+ * The quickest hour of the day over the same stretch, on the same statistic —
+ * the ride as it goes when the road is at its emptiest. Null until every hour
+ * has loaded, or when no hour has enough rides to be believed.
+ */
+function offPeak(key, stopDist, from, to, metric) {
+  if (!RIDES.hourly || RIDES.hourlyKey !== hourlyKey()) return null;
+  let best = null;
+  for (const [hour, data] of RIDES.hourly) {
+    const legs = data[key];
+    if (!legs) continue;
+    const timed = timeAlongRoute(legs, stopDist, from, to, metric);
+    if (!timed || timed.observations < OFFPEAK_MIN_RIDES) continue;
+    if (!best || timed.seconds < best.seconds) best = { seconds: timed.seconds, hour };
+  }
+  return best;
+}
+
+function formatDelta(seconds) {
+  const total = Math.round(Math.abs(seconds));
+  const sign = seconds < 0 ? "−" : "+";
+  return `${sign} ${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 // Average or median of the observed leg times, whichever the dropdown says.
 //
-// The average is the default, and it is the one to trust for a journey. Only
-// the mean is additive: the sum of a route's per-leg means is the mean of the
-// whole ride, while the sum of its per-leg medians is *not* the median of the
-// ride — legs are right-skewed and a bus late on one is late on the next, so
+// The median is the default, matching the map; the average is the one to
+// trust for a long journey. Only the mean is additive: the sum of a route's
+// per-leg means is the mean of the whole ride, while the sum of its per-leg
+// medians is *not* the median of the ride — legs are right-skewed and a bus late on one is late on the next, so
 // the medians add up short. Measured on Рясне-2 → Ковча at 08:00, ten legs:
 // the summed medians said 22 minutes where the vehicles themselves took 25–26,
 // while the summed means said 25.
@@ -896,7 +955,8 @@ function rideOptions(a, b) {
   const out = [];
 
   for (const route of RIDES.paths.routes) {
-    const legs = RIDES.data[`${route.route}|${route.dir}`];
+    const key = `${route.route}|${route.dir}`;
+    const legs = RIDES.data[key];
     if (!legs) continue;
     // Both points have to be on this route's street, and in the order it drives
     // them: the same two points are a different journey the other way round.
@@ -948,6 +1008,7 @@ function rideOptions(a, b) {
       to: to.along,
       board,
       alight,
+      offpeak: offPeak(key, stopDist, from.along, to.along, metric),
     });
   }
   return out.sort((x, y) => x.seconds - y.seconds);
@@ -996,14 +1057,27 @@ function rideRow(option, i) {
   const board = stops[option.route.path[option.board]];
   const alight = stops[option.route.path[option.alight]];
   const km = (option.metres / 1000).toFixed(1);
+  const offpeak = option.offpeak;
+  const hour = offpeak && `${String(offpeak.hour).padStart(2, "0")}:00`;
+  const delta =
+    offpeak && offpeak.hour !== hourKey()
+      ? ` <span class="ride-delta" title="against off-peak, ${hour}">` +
+        `${formatDelta(option.seconds - offpeak.seconds)}</span>`
+      : "";
+  const note = !offpeak
+    ? ""
+    : offpeak.hour === hourKey()
+      ? " · quickest hour of the day"
+      : ` · off-peak ${hour}: ${formatDuration(offpeak.seconds)}`;
   return (
     `<button type="button" class="ride-row" data-ride="${i}">` +
     `<span class="ride-name">${option.route.name}</span>` +
-    `<span class="ride-time">${formatDuration(option.seconds)}</span>` +
+    `<span class="ride-time">${formatDuration(option.seconds)}${delta}</span>` +
     `<span class="ride-detail">${board ? board[2] : "?"} → ${alight ? alight[2] : "?"}<br>` +
     `${km} km · ${option.observations} rides seen` +
     // Only when part of the total is filled in rather than measured.
-    `${option.holes ? ` · ${option.holes} of ${option.legs} legs estimated` : ""}</span>` +
+    `${option.holes ? ` · ${option.holes} of ${option.legs} legs estimated` : ""}` +
+    `${note}</span>` +
     `</button>`
   );
 }
@@ -1072,6 +1146,26 @@ async function loadRides() {
   }
 }
 
+// The off-peak figure needs every hour of the day, so it follows the answer
+// rather than holding it up; each hour is a small file, and the ones the
+// slider has already visited come from the cache.
+async function loadHourly() {
+  const key = hourlyKey();
+  RIDES.hourlyLoading = true;
+  try {
+    const hours = index.hours.map((h) => String(h).padStart(2, "0"));
+    // allSettled: an hour that fails to load drops out of the comparison
+    // rather than being asked for again on every frame of a drag.
+    const data = await Promise.allSettled(hours.map((h) => fetchSelection(`rides-${key}-${h}`)));
+    RIDES.hourly = new Map(
+      hours.flatMap((h, i) => (data[i].status === "fulfilled" ? [[h, data[i].value]] : [])),
+    );
+    RIDES.hourlyKey = key;
+  } finally {
+    RIDES.hourlyLoading = false;
+  }
+}
+
 // Which way you are travelling decides which routes can carry you, so the line
 // carries an arrowhead at its midpoint rather than leaving the reader to infer
 // the direction from the order they happened to click in.
@@ -1111,13 +1205,24 @@ function rulerRedraw() {
     // Fetched on demand, and only the first time a line is drawn — the ride
     // files and the route geometry are dead weight for a visitor who only ever
     // looks at the map.
+    // A full redraw rather than a repaint: the selection may have moved on
+    // while this was in flight, and the load it blocked has to start now.
     loadRides()
-      .then(() => {
-        els.rides.innerHTML = ridesReadout();
-      })
+      .then(rulerRedraw)
       .catch(() => {
         els.rides.innerHTML = `<div class="ride-empty">ride times unavailable</div>`;
       });
+  }
+  if (
+    index.rides &&
+    RULER.points.length >= 2 &&
+    !RIDES.hourlyLoading &&
+    RIDES.hourlyKey !== hourlyKey()
+  ) {
+    // A missing hour only costs the comparison, never the ride time itself.
+    loadHourly()
+      .then(rulerRedraw)
+      .catch(() => {});
   }
 }
 
@@ -1224,7 +1329,9 @@ function rulerBoot() {
     option.textContent = metric.label;
     els.rulerMetric.append(option);
   }
-  els.rulerMetric.value = "avg";
+  if ([...els.rulerMetric.options].some((o) => o.value === "med")) {
+    els.rulerMetric.value = "med";
+  }
 
   els.rulerMetric.addEventListener("change", rulerRedraw);
   els.rulerClear.addEventListener("click", rulerClear);
