@@ -491,9 +491,9 @@ timezone, clamped to the nearest hour the collector actually polls.
 
 ## Licence
 
-[WTFPL](LICENSE). Do what the fuck you want to.
+Code: [MIT](LICENSE). The ride-time dataset this project derives: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), credit **lad.lviv.ua**.
 
-The data behind it is not mine to relicense: vehicle positions come from the Lviv operator's
+The raw data behind it is not mine to relicense: vehicle positions come from the Lviv operator's
 GTFS-RT feed, and the basemap is © OpenStreetMap contributors.
 
 ## Contact
