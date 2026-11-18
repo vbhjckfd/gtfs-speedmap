@@ -366,7 +366,43 @@ input[type="range"] {
   fill: var(--muted);
 }
 
+.panel-toggle {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px 0 0;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.panel-toggle svg {
+  transition: transform 0.15s;
+}
+
+.collapsed .panel-toggle svg {
+  transform: rotate(180deg);
+}
+
 @media (max-width: 560px) {
+  .panel-toggle {
+    display: flex;
+  }
+
+  .panel.collapsed .panel-body {
+    display: none;
+  }
+
+  .panel.collapsed .sub {
+    margin-bottom: 0;
+  }
+
   /* Short of the right edge: the zoom buttons and the ride-time toggle live
      there, and a full-width panel buries them. */
   .panel {

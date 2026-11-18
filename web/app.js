@@ -37,6 +37,8 @@ const els = {
   rides: document.getElementById("rides"),
   rulerClear: document.getElementById("ruler-clear"),
   rulerButton: null, // the map control, created below
+  panel: document.getElementById("panel"),
+  panelToggle: document.getElementById("panel-toggle"),
 };
 
 /* ---------- colour ---------- */
@@ -1201,6 +1203,38 @@ function rulerBoot() {
   rulerRedraw();
 }
 
+/* ---------- panel collapse ---------- */
+
+// On a phone the open panel covers most of the map, so it folds down to its
+// title and summary line. The button only shows on narrow screens; the choice
+// is remembered per visitor.
+const PANEL_KEY = "panelCollapsed";
+
+function panelCollapse(collapsed) {
+  els.panel.classList.toggle("collapsed", collapsed);
+  els.panelToggle.setAttribute("aria-expanded", String(!collapsed));
+  const label = t(collapsed ? "showControls" : "hideControls");
+  els.panelToggle.title = label;
+  els.panelToggle.setAttribute("aria-label", label);
+}
+
+function panelBoot() {
+  let saved = false;
+  try {
+    saved = localStorage.getItem(PANEL_KEY) === "1";
+  } catch {}
+  panelCollapse(saved);
+  els.panelToggle.addEventListener("click", () => {
+    const collapsed = !els.panel.classList.contains("collapsed");
+    panelCollapse(collapsed);
+    try {
+      localStorage.setItem(PANEL_KEY, collapsed ? "1" : "0");
+    } catch {}
+  });
+}
+
+panelBoot();
+
 /* ---------- language ---------- */
 
 // Everything app.js writes in words, written again in the current language.
@@ -1228,6 +1262,7 @@ function relabel() {
   zoom.querySelector(".leaflet-control-zoom-out").title = t("zoomOut");
   els.rulerButton.title = t("rulerTitle");
   els.rulerButton.setAttribute("aria-label", t("rulerLabel"));
+  panelCollapse(els.panel.classList.contains("collapsed"));
   map.closePopup();
   if (RULER.on) els.rides.innerHTML = ridesReadout();
   if (currentRides()) els.subtitle.textContent = describe();

@@ -83,6 +83,8 @@ const I18N = {
     rulerTitle: "Measure ride time between two points",
     rulerLabel: "Measure ride time",
     zoomIn: "Zoom in",
+    hideControls: "Hide controls",
+    showControls: "Show controls",
     zoomOut: "Zoom out",
   },
 
@@ -159,6 +161,8 @@ const I18N = {
     rulerTitle: "Виміряти час поїздки між двома точками",
     rulerLabel: "Виміряти час поїздки",
     zoomIn: "Наблизити",
+    hideControls: "Сховати панель",
+    showControls: "Показати панель",
     zoomOut: "Віддалити",
   },
 };
