@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import struct
 import sys
 import zlib
@@ -126,6 +127,11 @@ def _shape_legs(route: dict, stops: dict):
         along += math.hypot(dx, dy)
 
 
+def stamp_version(html: str, month: str) -> str:
+    """Point every og.png URL at ?v=<month>, so share caches refetch a redrawn image."""
+    return re.sub(r"/og\.png(\?v=[^\"']*)?", f"/og.png?v={month}", html)
+
+
 def build() -> None:
     index = json.loads((WEB_DATA_DIR / "index.json").read_text())
     full = [m["key"] for m in index["months"] if not m["part"]]
@@ -181,6 +187,8 @@ def build() -> None:
 
     out = WEB_DATA_DIR.parent / "og.png"
     write_png(out, pixels, WIDTH, HEIGHT)
+    page = WEB_DATA_DIR.parent / "index.html"
+    page.write_text(stamp_version(page.read_text(), month))
     print(f"{out} — {month}, {len(delays):,} legs, {out.stat().st_size / 1024:.0f} KB")
 
 

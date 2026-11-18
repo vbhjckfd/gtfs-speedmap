@@ -21,3 +21,12 @@ def test_pools_routes_by_rides_and_compares_with_quickest_busy_hour():
 
 def test_leg_without_a_busy_hour_has_no_delay():
     assert leg_delays(ROUTES, {8: {"1|0": row(100, 3)}}, 8) == {}
+
+
+def test_stamps_month_on_every_og_png_url():
+    from speedmap.make_og import stamp_version
+
+    html = '<meta content="https://x/og.png" /><meta content="https://x/og.png?v=2026-07" />'
+    assert stamp_version(html, "2026-10") == (
+        '<meta content="https://x/og.png?v=2026-10" /><meta content="https://x/og.png?v=2026-10" />'
+    )
