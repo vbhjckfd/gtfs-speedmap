@@ -13,7 +13,7 @@ CAFFEINATE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -
 NVM_SH := $(or $(NVM_DIR),$(HOME)/.nvm)/nvm.sh
 NODE := $(shell test -s "$(NVM_SH)" && echo '. "$(NVM_SH)" && nvm use --silent &&')
 
-.PHONY: help ingest build serve test deploy deploy-data update pull push
+.PHONY: help ingest build serve test deploy deploy-data update pull push og
 
 help:
 	@echo "make ingest                   read every finished day in R2 into data/ (resumable)"
@@ -22,6 +22,7 @@ help:
 	@echo "    ARGS='--force --only segments'   redo one pass: speed or segments"
 	@echo "make build                    build every month into web/data/, then the index"
 	@echo "make build ARGS='--month 2026-07'   just that month, then the index"
+	@echo "make og                       re-render web/og.png (share image) from web/data/"
 	@echo "make serve                    serve web/ on http://localhost:8000"
 	@echo "make test                     run unit tests"
 	@echo "make deploy                   publish web/ as it stands: code changes, no rebuild"
@@ -37,6 +38,10 @@ ingest:
 
 build:
 	$(CAFFEINATE) $(PY) -m speedmap.build_web $(ARGS)
+
+# Share image drawn from the built map files; ships with the next make deploy.
+og:
+	$(PY) -m speedmap.make_og
 
 serve:
 	cd web && $(PY) -m http.server 8000

@@ -4,7 +4,7 @@ Deliberately dependency-free: a 1200x630 RGB buffer written out as a PNG by
 hand, so the project keeps its `pip install` down to the pipeline's needs. No
 basemap, just every leg on a dark ground, coloured as the map colours it.
 
-Run: python -m speedmap.make_og
+Run: make og
 """
 
 from __future__ import annotations
