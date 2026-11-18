@@ -1,5 +1,7 @@
 name = "gtfs-speedmap"
 compatibility_date = "2026-08-01"
+workers_dev = true
+routes = [{ pattern = "speedmap.lad.lviv.ua", custom_domain = true }]
 
 # Assets-only Worker: no script, Cloudflare serves web/ straight from the edge.
 # web/_headers controls caching.

@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://gtfs-speedmap.vbhjckfd.workers.dev/"
+Homepage = "https://speedmap.lad.lviv.ua/"
 Repository = "https://github.com/vbhjckfd/gtfs-speedmap"
 
 [project.optional-dependencies]

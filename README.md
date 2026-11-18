@@ -275,7 +275,7 @@ visible instead of being filled.
 
 ### Published files
 
-All under `https://gtfs-speedmap.vbhjckfd.workers.dev/data/`, plain JSON, no auth:
+All under `https://speedmap.lad.lviv.ua/data/`, plain JSON, no auth:
 
 | File | Content |
 |---|---|
@@ -288,7 +288,7 @@ Example — weekday 08:00 legs of every route in October 2026, with stop names:
 
 ```python
 import json, urllib.request
-base = "https://gtfs-speedmap.vbhjckfd.workers.dev/data/"
+base = "https://speedmap.lad.lviv.ua/data/"
 get = lambda f: json.load(urllib.request.urlopen(base + f))
 paths, rides = get("paths-2026-10.json"), get("rides-2026-10-wd-08.json")
 for r in paths["routes"]:
@@ -461,7 +461,7 @@ The whole selection lives in the query string, viewport included, so a link can 
 junction rather than the whole city:
 
 ```
-https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=med&z=16&lat=49.8408&lon=24.0219
+https://speedmap.lad.lviv.ua/?month=2026-07&days=wd&hour=08&stat=med&z=16&lat=49.8408&lon=24.0219
 ```
 
 `month` takes `YYYY-MM` (an old `all` link falls back to the default); `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;

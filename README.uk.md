@@ -278,7 +278,7 @@ Cloudflare Worker (лише статичні файли)
 
 ### Опубліковані файли
 
-Усі за адресою `https://gtfs-speedmap.vbhjckfd.workers.dev/data/`, звичайний JSON, без
+Усі за адресою `https://speedmap.lad.lviv.ua/data/`, звичайний JSON, без
 авторизації:
 
 | Файл | Вміст |
@@ -292,7 +292,7 @@ Cloudflare Worker (лише статичні файли)
 
 ```python
 import json, urllib.request
-base = "https://gtfs-speedmap.vbhjckfd.workers.dev/data/"
+base = "https://speedmap.lad.lviv.ua/data/"
 get = lambda f: json.load(urllib.request.urlopen(base + f))
 paths, rides = get("paths-2026-10.json"), get("rides-2026-10-wd-08.json")
 for r in paths["routes"]:
@@ -475,7 +475,7 @@ python -m speedmap.depots --merge   # лишити відомі місця, до
 перехрестя, а не на все місто:
 
 ```
-https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=med&lang=uk&z=16&lat=49.8408&lon=24.0219
+https://speedmap.lad.lviv.ua/?month=2026-07&days=wd&hour=08&stat=med&lang=uk&z=16&lat=49.8408&lon=24.0219
 ```
 
 `month` приймає `YYYY-MM` (старе посилання з `all` падає на типовий місяць); `days` — `all`, `wd` або
