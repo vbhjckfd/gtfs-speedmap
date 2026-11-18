@@ -1,9 +1,9 @@
-/* Lviv bus speed map.
+/* Lviv bus ride times.
  *
- * Draws one arrow per 25 m cell *per direction of travel* on a canvas overlay.
- * Leaflet's own vector layer creates a path per marker, which stalls well below
- * the ~40k cells a busy hour produces, so they are painted straight onto a
- * single canvas.
+ * Every stop-to-stop leg of the bus network, drawn along the route's own line
+ * and coloured by how much longer it takes at the chosen hour than at its own
+ * quickest hour of the day. The legs are painted onto one canvas: a few
+ * thousand Leaflet polylines would each be a DOM path, redrawn on every pan.
  */
 
 const DATA = "data";
@@ -11,25 +11,13 @@ const LVIV = [49.8397, 24.0297];
 // The network with a margin round it. A shared link outside it is a typo, not
 // a view, and panning past it only finds blank map.
 const BOUNDS = L.latLngBounds([49.55, 23.6], [50.1, 24.45]);
-const DOT_MIN_PX = 2.0;
-// Below this an arrowhead is a smudge, so the zoomed-out map keeps its dots:
-// at zoom 13 a 25 m cell is under two pixels across and no shape drawn in it
-// could carry a direction anyway.
-const ARROW_MIN_PX = 3.0;
-// And an upper bound, which the ground size alone does not give: at zoom 19 a
-// 25 m cell is 130 px across, so an arrow drawn at its true size runs 117 px
-// and swallows its neighbours. Past this the mark stops growing and the map
-// gains white space between cells instead — which is what zooming in is for.
-const ARROW_MAX_PX = 16.0;
-// Right-hand traffic. Each arrow is nudged to the right of its own heading so
-// the two directions of a street lie side by side, as the lanes do, rather than
-// on top of each other — their measured mean positions differ by less than the
-// GPS noise between them.
-const LANE_OFFSET = 0.55;
+// A leg this much slower than its off-peak is drawn fully red.
+const DELAY_HIGH = 1.0;
+// Click slop around a drawn leg, in pixels.
+const HIT_PX = 8;
 const CACHE = new Map();
 
 let index = null;
-let current = null; // { lat, lon, v, n } for the visible selection
 let requestSeq = 0;
 
 const els = {
@@ -47,7 +35,6 @@ const els = {
   scaleUnit: document.getElementById("scale-unit"),
   ruler: document.getElementById("ruler"),
   rides: document.getElementById("rides"),
-  rulerMetric: document.getElementById("ruler-metric"),
   rulerClear: document.getElementById("ruler-clear"),
   rulerButton: null, // the map control, created below
 };
@@ -78,43 +65,25 @@ function ramp(t) {
   return STOPS[STOPS.length - 1][1];
 }
 
-// Each metric carries its own domain, because km/h, a ratio and a spread
-// cannot share one scale. `invert` is for metrics whose high end is the bad
-// end — a wide p85−p15 spread means unpredictable, so it colours red.
-function activeMetric() {
-  return index.metrics.find((m) => m.key === els.metric.value) || index.metrics[0];
-}
-
-function metricColor(value, metric) {
-  const { low, high } = metric.scale;
-  const t = (value - low) / (high - low);
-  const [r, g, b] = ramp(metric.invert ? 1 - t : t);
+// 0 = as quick as the leg ever gets (green), DELAY_HIGH and up = red.
+function delayColor(delay) {
+  const [r, g, b] = ramp(1 - delay / DELAY_HIGH);
   return `rgb(${r},${g},${b})`;
 }
 
-// The sparkline is always km/h whatever metric is on screen, so it keeps its
-// own scale rather than borrowing the active one.
-const KMH_METRIC = { scale: { low: 5, high: 35 }, invert: false, factor: 1, decimals: 1 };
-
-function speedColor(kmh) {
-  return metricColor(kmh, KMH_METRIC);
-}
-
-function format(value, metric) {
-  if (value == null || Number.isNaN(value)) return "—";
-  return (value * metric.factor).toFixed(metric.decimals);
-}
-
 function paintLegend() {
-  const metric = activeMetric();
   const stops = STOPS.map(([p]) => {
-    const [r, g, b] = ramp(metric.invert ? 1 - p : p);
+    const [r, g, b] = ramp(1 - p);
     return `rgb(${r},${g},${b}) ${p * 100}%`;
   });
   els.ramp.style.background = `linear-gradient(90deg, ${stops.join(", ")})`;
-  els.scaleLow.textContent = `≤ ${format(metric.scale.low, metric)}`;
-  els.scaleHigh.textContent = `≥ ${format(metric.scale.high, metric)}`;
-  els.scaleUnit.textContent = metric.unit;
+  els.scaleLow.textContent = "+0%";
+  els.scaleUnit.textContent = "longer than off-peak";
+  els.scaleHigh.textContent = `≥ +${Math.round(DELAY_HIGH * 100)}%`;
+}
+
+function formatPercent(delay) {
+  return `+${Math.round(Math.max(0, delay) * 100)}%`;
 }
 
 /* ---------- map ---------- */
@@ -135,15 +104,176 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 
-function metresPerPixel() {
-  const centre = map.getCenter();
-  return (
-    (40075016.686 * Math.cos((centre.lat * Math.PI) / 180)) /
-    (256 * Math.pow(2, map.getZoom()))
-  );
+const METRES_PER_DEG_LAT = 111320;
+
+function metresBetween(lat1, lon1, lat2, lon2) {
+  const dy = (lat1 - lat2) * METRES_PER_DEG_LAT;
+  const dx = (lon1 - lon2) * METRES_PER_DEG_LAT * Math.cos((lat1 * Math.PI) / 180);
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
-const DotLayer = L.Layer.extend({
+/* ---------- loaded month ---------- */
+
+// One month and day type at a time: its route geometry, every hour's leg
+// times (the off-peak needs them all), and the whole-day file. The ruler reads
+// the same state.
+const RIDES = {
+  key: null, // `${month}-${daytype}` this state belongs to
+  paths: null,
+  hourly: null, // Map "HH" → rides payload
+  whole: null,
+  legs: null, // stop pairs built from `paths`
+  highlight: null,
+  expanded: false,
+};
+
+function monthKey() {
+  return `${els.month.value}-${els.daytype.value}`;
+}
+
+function hourKey() {
+  return els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0");
+}
+
+// The payload for the hour on screen, or null while it loads.
+function currentRides() {
+  if (RIDES.key !== monthKey()) return null;
+  return hourKey() === "all" ? RIDES.whole : RIDES.hourly.get(hourKey()) || null;
+}
+
+async function fetchSelection(key) {
+  if (CACHE.has(key)) return CACHE.get(key);
+  const promise = fetch(`${DATA}/${key}.json`)
+    .then((r) => {
+      if (!r.ok) throw new Error(`${key}: HTTP ${r.status}`);
+      return r.json();
+    })
+    .catch((err) => {
+      CACHE.delete(key);
+      throw err;
+    });
+  CACHE.set(key, promise);
+  return promise;
+}
+
+async function loadMonth() {
+  const key = monthKey();
+  if (RIDES.key === key) return;
+  const hours = index.hours.map((h) => String(h).padStart(2, "0"));
+  const [paths, whole, ...hourly] = await Promise.all([
+    fetchSelection(`paths-${els.month.value}`),
+    fetchSelection(`rides-${key}-all`),
+    // allSettled: an hour that fails to load drops out of the off-peak
+    // comparison rather than blanking the map.
+    ...hours.map((h) =>
+      fetchSelection(`rides-${key}-${h}`).then(
+        (v) => v,
+        () => null,
+      ),
+    ),
+  ]);
+  if (key !== monthKey()) return; // a newer selection won
+  if (RIDES.paths !== paths) {
+    RIDES.paths = paths; // routeLine reads it while the legs are built
+    RIDES.legs = buildLegs(paths);
+  }
+  RIDES.whole = whole;
+  RIDES.hourly = new Map(hours.flatMap((h, i) => (hourly[i] ? [[h, hourly[i]]] : [])));
+  RIDES.key = key;
+  RIDES.expanded = false;
+}
+
+/* ---------- legs ---------- */
+
+/**
+ * Every distinct stop-to-stop pair in the month's network, each with the line
+ * it is drawn along and the route legs that drive it.
+ *
+ * Several routes share most of their legs through the centre; pooled, they are
+ * one stretch of street with one ride time, which is what the map is about.
+ * The line is cut from the first route's own shape between the two stops.
+ */
+function buildLegs(paths) {
+  const byPair = new Map();
+  paths.routes.forEach((route, r) => {
+    for (let i = 0; i + 1 < route.path.length; i++) {
+      const a = route.path[i];
+      const b = route.path[i + 1];
+      const pair = `${a}>${b}`;
+      let leg = byPair.get(pair);
+      if (!leg) {
+        leg = { a, b, points: legLine(paths, route, i), members: [] };
+        if (leg.points.length < 2) continue;
+        leg.box = L.latLngBounds(leg.points);
+        byPair.set(pair, leg);
+      }
+      leg.members.push({ r, i });
+    }
+  });
+  return [...byPair.values()];
+}
+
+function legLine(paths, route, i) {
+  const stops = paths.stops;
+  const straight = [stops[route.path[i]], stops[route.path[i + 1]]]
+    .filter(Boolean)
+    .map((s) => [s[0], s[1]]);
+  if (!route.shape || !route.dist) return straight;
+  const { points, cum } = routeLine(route);
+  const from = route.dist[i];
+  const to = route.dist[i + 1];
+  if (!(to > from)) return straight;
+  const slice = [pointAlong(points, cum, from)];
+  for (let k = 0; k < points.length; k++) {
+    if (cum[k] > from && cum[k] < to) slice.push(points[k]);
+  }
+  slice.push(pointAlong(points, cum, to));
+  return slice;
+}
+
+/**
+ * One leg's ride time in a payload: the n-weighted mean of the chosen statistic
+ * across every route that drives it.
+ *
+ * shortcut: a pooled median is approximated by the n-weighted mean of the
+ * per-route medians; exact would need the per-route histograms shipped, which
+ * is only worth it if routes sharing a leg turn out to differ a lot.
+ */
+function legTime(leg, data, metric) {
+  if (!data) return null;
+  let sum = 0;
+  let n = 0;
+  for (const { r, i } of leg.members) {
+    const route = RIDES.paths.routes[r];
+    const legs = data[`${route.route}|${route.dir}`];
+    const v = legs && legs[metric] && legs[metric][i];
+    if (v == null) continue;
+    const w = legs.n[i] || 0;
+    sum += v * w;
+    n += w;
+  }
+  return n ? { seconds: sum / n, n } : null;
+}
+
+// The leg as it goes when the road is at its emptiest: its quickest hour with
+// enough rides to be believed. Cached on the leg per month and statistic.
+function legOffPeak(leg, metric) {
+  const key = `${RIDES.key}|${metric}`;
+  if (leg.offKey === key) return leg.off;
+  let best = null;
+  for (const [hour, data] of RIDES.hourly) {
+    const t = legTime(leg, data, metric);
+    if (!t || t.n < OFFPEAK_MIN_RIDES) continue;
+    if (!best || t.seconds < best.seconds) best = { seconds: t.seconds, hour };
+  }
+  leg.offKey = key;
+  leg.off = best;
+  return best;
+}
+
+/* ---------- canvas ---------- */
+
+const LegLayer = L.Layer.extend({
   onAdd(m) {
     this._canvas = L.DomUtil.create("canvas", "leaflet-zoom-animated");
     this._ctx = this._canvas.getContext("2d");
@@ -180,131 +310,89 @@ const DotLayer = L.Layer.extend({
     this.redraw();
   },
 
-  // A cell is `cell_size_m` across; draw it at its true ground size so marks
-  // merge into corridors when zoomed out and separate when zoomed in.
-  _radiusPx() {
-    const ground = index.cell_size_m / metresPerPixel() / 2;
-    return Math.min(ARROW_MAX_PX, Math.max(DOT_MIN_PX, ground));
+  // Thin when zoomed out, so a corridor of shared legs stays legible.
+  _widthPx() {
+    return Math.max(1.5, Math.min(5, map.getZoom() - 10.5));
   },
 
+  /**
+   * Paints every leg in view and keeps its screen line for the click test.
+   *
+   * Right-hand traffic: each leg is nudged to the right of its own direction,
+   * so the two directions of a street lie side by side instead of on top of
+   * each other.
+   */
   redraw() {
     const ctx = this._ctx;
     if (!ctx) return;
     const size = map.getSize();
     ctx.clearRect(0, 0, size.x, size.y);
-    if (!current) return;
-
-    const r = this._radiusPx();
-    const arrows = r >= ARROW_MIN_PX && Array.isArray(current.dir);
+    this.drawn = [];
+    const data = currentRides();
+    if (!data) return;
+    const metric = els.metric.value;
+    const width = this._widthPx();
+    const shift = width * 0.8;
     const bounds = map.getBounds().pad(0.05);
-    const { lat, lon } = current;
-    const values = speedValues();
-    const metric = activeMetric();
-    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
 
-    for (let i = 0; i < lat.length; i++) {
-      if (values[i] == null) continue;
-      if (lat[i] < bounds.getSouth() || lat[i] > bounds.getNorth()) continue;
-      if (lon[i] < bounds.getWest() || lon[i] > bounds.getEast()) continue;
-      const p = map.latLngToContainerPoint([lat[i], lon[i]]);
-      ctx.fillStyle = metricColor(values[i], metric);
+    for (const leg of RIDES.legs) {
+      if (!bounds.intersects(leg.box)) continue;
+      const t = legTime(leg, data, metric);
+      if (!t) continue;
+      const off = legOffPeak(leg, metric);
+      const screen = offsetLine(
+        leg.points.map((p) => map.latLngToContainerPoint(p)),
+        shift,
+      );
+      ctx.strokeStyle = off ? delayColor(t.seconds / off.seconds - 1) : "#9aa5b1";
       ctx.beginPath();
-      if (arrows) traceArrow(ctx, arrowAt(current, i, p, r), r);
-      else ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
+      screen.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.stroke();
+      this.drawn.push({ leg, screen });
     }
-    ctx.globalAlpha = 1;
   },
 });
 
-/* ---------- arrows ---------- */
+// Each vertex moved `shift` px along the right-hand normal of its segment.
+function offsetLine(pts, shift) {
+  return pts.map((p, k) => {
+    const a = pts[Math.max(0, k - 1)];
+    const b = pts[Math.min(pts.length - 1, k + 1)];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Screen y grows downwards, so (−dy, dx) is the right-hand side.
+    return { x: p.x - (dy / len) * shift, y: p.y + (dx / len) * shift };
+  });
+}
 
-// sin and cos of every heading in a payload, computed once. A redraw touches
-// tens of thousands of cells and runs on every pan, so the trigonometry is not
-// worth repeating per frame.
-const HEADINGS = new WeakMap();
+function distanceToSegment(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
 
-function headingsOf(payload) {
-  let cached = HEADINGS.get(payload);
-  if (cached) return cached;
-  const n = payload.dir.length;
-  cached = { sin: new Float32Array(n), cos: new Float32Array(n) };
-  for (let i = 0; i < n; i++) {
-    const radians = (payload.dir[i] * Math.PI) / 180;
-    cached.sin[i] = Math.sin(radians);
-    cached.cos[i] = Math.cos(radians);
+function nearestLeg(point) {
+  let best = null;
+  let bestPx = HIT_PX;
+  for (const { leg, screen } of legsLayer.drawn || []) {
+    for (let k = 0; k + 1 < screen.length; k++) {
+      const d = distanceToSegment(point, screen[k], screen[k + 1]);
+      if (d < bestPx) {
+        bestPx = d;
+        best = leg;
+      }
+    }
   }
-  HEADINGS.set(payload, cached);
-  return cached;
+  return best;
 }
 
-/**
- * Where one cell's arrow sits on screen and which way it points.
- *
- * Bearings are degrees clockwise from north; screen y grows downwards, so the
- * unit vector along travel is (sin, −cos). Its right-hand normal carries the
- * lane offset, and the hit test uses this same centre — an arrow has to be
- * clickable where it is drawn, not where its cell's mean position is.
- */
-function arrowAt(payload, i, p, r) {
-  const { sin, cos } = headingsOf(payload);
-  const ux = sin[i];
-  const uy = -cos[i];
-  return {
-    x: p.x - uy * r * LANE_OFFSET,
-    y: p.y + ux * r * LANE_OFFSET,
-    ux,
-    uy,
-  };
-}
-
-// A dart rather than a plain triangle: the notch in its tail reads as a
-// direction at four pixels, where a triangle still looks like a blob.
-function traceArrow(ctx, a, r) {
-  // Narrower than the cell is wide. A busy corridor stacks these nose to tail,
-  // and at the width of the square the barbs of one overlap the next into a
-  // sawtooth that reads as noise rather than as traffic.
-  const length = r * 1.8;
-  const half = r * 0.6;
-  const nx = -a.uy; // right-hand normal
-  const ny = a.ux;
-  ctx.moveTo(a.x + a.ux * length * 0.6, a.y + a.uy * length * 0.6);
-  ctx.lineTo(a.x - a.ux * length * 0.4 + nx * half, a.y - a.uy * length * 0.4 + ny * half);
-  ctx.lineTo(a.x - a.ux * length * 0.15, a.y - a.uy * length * 0.15);
-  ctx.lineTo(a.x - a.ux * length * 0.4 - nx * half, a.y - a.uy * length * 0.4 - ny * half);
-  ctx.closePath();
-}
-
-const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-
-function compass(degrees) {
-  return COMPASS[Math.round((((degrees % 360) + 360) % 360) / 45) % 8];
-}
-
-const dots = new DotLayer();
-
-/* ---------- selection ---------- */
-
-// The chosen statistic ships in the same file as every other one, so switching
-// between them never refetches. Falls back to the average for data built before
-// histograms existed.
-function speedValues(payload) {
-  const source = payload || current;
-  if (!source) return [];
-  return source[els.metric.value] || source.v;
-}
-
-function hourKey() {
-  return els.allHours.checked ? "all" : String(els.hour.value).padStart(2, "0");
-}
-
-function selectionKey() {
-  return `${els.month.value}-${els.daytype.value}-${hourKey()}`;
-}
-
-function profileKey() {
-  return `profile-${els.month.value}-${els.daytype.value}`;
-}
+const legsLayer = new LegLayer();
 
 /* ---------- shareable URL ---------- */
 
@@ -319,7 +407,7 @@ function writeUrl() {
     hour: hourKey(),
     stat: els.metric.value,
     // The viewport too, so a link can point at one junction rather than the
-    // whole city. 5 dp is well under a cell.
+    // whole city.
     z: String(map.getZoom()),
     lat: centre.lat.toFixed(5),
     lon: centre.lng.toFixed(5),
@@ -347,8 +435,7 @@ function currentHour() {
 }
 
 // Day counts for the month on screen, so "Weekdays" says how many weekdays that
-// month holds rather than the whole archive. An index built before per-month
-// counts existed has only the archive-wide ones.
+// month holds rather than the whole archive.
 function labelDaytypes() {
   const month = index.months.find((m) => m.key === els.month.value);
   for (const option of els.daytype.options) {
@@ -414,67 +501,40 @@ function readUrl() {
   }
 }
 
-async function fetchSelection(key) {
-  if (CACHE.has(key)) return CACHE.get(key);
-  const promise = fetch(`${DATA}/${key}.json`)
-    .then((r) => {
-      if (!r.ok) throw new Error(`${key}: HTTP ${r.status}`);
-      return r.json();
-    })
-    .catch((err) => {
-      CACHE.delete(key);
-      throw err;
-    });
-  CACHE.set(key, promise);
-  return promise;
-}
-
-function prefetchNeighbours() {
-  if (els.allHours.checked) return;
-  const hours = index.hours;
-  const at = hours.indexOf(Number(els.hour.value));
-  [at - 1, at + 1].forEach((i) => {
-    if (i >= 0 && i < hours.length) {
-      const hour = String(hours[i]).padStart(2, "0");
-      fetchSelection(`${els.month.value}-${els.daytype.value}-${hour}`).catch(() => {});
-    }
-  });
-}
-
-function describe(count) {
+function describe() {
   const parts = [els.month.selectedOptions[0].textContent];
   parts.push(els.daytype.selectedOptions[0].textContent);
   const hour = String(els.hour.value).padStart(2, "0");
   parts.push(els.allHours.checked ? "all hours" : `${hour}:00–${hour}:59`);
-  parts.push(`${count.toLocaleString()} cells`);
+  parts.push(`${(legsLayer.drawn || []).length.toLocaleString()} legs in view`);
   parts.push(els.metric.selectedOptions[0].textContent.toLowerCase());
   return parts.join(" · ");
 }
 
-async function render() {
-  const key = selectionKey();
-  const seq = ++requestSeq;
-  writeUrl();
-  try {
-    const payload = await fetchSelection(key);
-    if (seq !== requestSeq) return; // a newer selection won
-    // An open popup describes one cell of the old selection; its figures and
-    // its highlighted hour are wrong for the new one.
-    if (payload !== current) map.closePopup();
-    current = payload;
-    dots.redraw();
-    els.subtitle.textContent = describe(payload.lat.length);
-  } catch (err) {
-    if (seq !== requestSeq) return;
-    map.closePopup();
-    current = null;
-    dots.redraw();
-    els.subtitle.textContent = `no data for this selection (${err.message})`;
-  }
-  // A new hour is a new set of speeds, so a line already on the map is timed
+function repaint() {
+  legsLayer.redraw();
+  els.subtitle.textContent = describe();
+  // A new hour is a new set of times, so a line already on the map is timed
   // again against them.
   if (RULER.on) rulerRedraw();
-  prefetchNeighbours();
+}
+
+async function render() {
+  const seq = ++requestSeq;
+  writeUrl();
+  // An open popup describes one leg of the old selection.
+  map.closePopup();
+  if (RIDES.key !== monthKey()) els.subtitle.textContent = "loading…";
+  try {
+    await loadMonth();
+    if (seq !== requestSeq) return;
+    repaint();
+  } catch (err) {
+    if (seq !== requestSeq) return;
+    RIDES.key = null;
+    legsLayer.redraw();
+    els.subtitle.textContent = `no data for this selection (${err.message})`;
+  }
 }
 
 function syncHourLabel() {
@@ -487,185 +547,76 @@ function syncHourLabel() {
 
 /* ---------- popup ---------- */
 
-const METRES_PER_DEG_LAT = 111320;
-
-// A popup click can afford to scan all ~40k cells; the ruler cannot, since it
-// looks up a cell every 12 m along the line. Cells are bucketed once per
-// payload and the lookup walks outwards a ring of buckets at a time.
-const BUCKET_M = 100;
-const GRIDS = new WeakMap();
-
-function gridOf(source) {
-  const cached = GRIDS.get(source);
-  if (cached) return cached;
-  const latStep = BUCKET_M / METRES_PER_DEG_LAT;
-  const lonStep = latStep / Math.cos((LVIV[0] * Math.PI) / 180);
-  const buckets = new Map();
-  for (let i = 0; i < source.lat.length; i++) {
-    const key = `${Math.floor(source.lat[i] / latStep)},${Math.floor(source.lon[i] / lonStep)}`;
-    const bucket = buckets.get(key);
-    if (bucket) bucket.push(i);
-    else buckets.set(key, [i]);
-  }
-  const grid = { latStep, lonStep, buckets };
-  GRIDS.set(source, grid);
-  return grid;
-}
-
-/**
- * Index of the point in a {lat, lon} pair of arrays nearest to `latlng`.
- * `maxDistance` bounds how far out to search; without it the search runs until
- * it finds something, which on an empty selection means the whole grid. It
- * bounds the search, not the answer — a hit slightly beyond it can still come
- * back, so callers decide what counts as near enough by checking `distance`.
- * Index is -1 and distance Infinity when the search found nothing at all.
- */
-function nearestIndex(source, latlng, maxDistance, heading) {
-  const grid = gridOf(source);
-  const directed = heading != null && Array.isArray(source.dir);
-  const cosLat = Math.cos((latlng.lat * Math.PI) / 180);
-  const gy = Math.floor(latlng.lat / grid.latStep);
-  const gx = Math.floor(latlng.lng / grid.lonStep);
-  const rings = Number.isFinite(maxDistance) ? Math.ceil(maxDistance / BUCKET_M) + 1 : 64;
-  let best = -1;
-  let bestDist = Infinity;
-
-  for (let ring = 0; ring <= rings; ring++) {
-    // Nothing in this ring can be nearer than (ring − 1) buckets, so a hit
-    // already inside that radius cannot be beaten by going further out.
-    if (best >= 0 && Math.sqrt(bestDist) <= (ring - 1) * BUCKET_M) break;
-    for (let dy = -ring; dy <= ring; dy++) {
-      for (let dx = -ring; dx <= ring; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue; // interior already done
-        const bucket = grid.buckets.get(`${gy + dy},${gx + dx}`);
-        if (!bucket) continue;
-        for (const i of bucket) {
-          // The two directions of a street are a lane apart, far closer than
-          // the position alone can separate, so a caller that knows which way
-          // it means says so and the other one is passed over.
-          if (directed && angleBetween(source.dir[i], heading) > 90) continue;
-          const my = (source.lat[i] - latlng.lat) * METRES_PER_DEG_LAT;
-          const mx = (source.lon[i] - latlng.lng) * METRES_PER_DEG_LAT * cosLat;
-          const d = mx * mx + my * my;
-          if (d < bestDist) {
-            bestDist = d;
-            best = i;
-          }
-        }
-      }
-    }
-  }
-  return { index: best, distance: Math.sqrt(bestDist) };
-}
-
-// Smallest angle between two bearings, in degrees.
-function angleBetween(a, b) {
-  const diff = Math.abs(((a - b) % 360) + 360) % 360;
-  return diff > 180 ? 360 - diff : diff;
-}
-
-/**
- * The cell whose arrow is drawn nearest a click, measured in pixels.
- *
- * Two cells share a square, one per direction, and they are told apart on
- * screen by the lane offset the arrows are drawn with — a few pixels. Ranking
- * by ground distance would ignore exactly the nudge the reader is aiming at,
- * so the candidates within `toleranceM` are ranked where they are painted.
- */
-function nearestArrow(source, latlng, toleranceM) {
-  if (!Array.isArray(source.dir)) return nearestIndex(source, latlng, toleranceM);
-  const grid = gridOf(source);
-  const gy = Math.floor(latlng.lat / grid.latStep);
-  const gx = Math.floor(latlng.lng / grid.lonStep);
-  const rings = Math.ceil(toleranceM / BUCKET_M) + 1;
-  const at = map.latLngToContainerPoint(latlng);
-  const r = dots._radiusPx();
-  const perPixel = metresPerPixel();
-  let best = -1;
-  let bestPx = Infinity;
-
-  for (let dy = -rings; dy <= rings; dy++) {
-    for (let dx = -rings; dx <= rings; dx++) {
-      const bucket = grid.buckets.get(`${gy + dy},${gx + dx}`);
-      if (!bucket) continue;
-      for (const i of bucket) {
-        const p = map.latLngToContainerPoint([source.lat[i], source.lon[i]]);
-        const a = arrowAt(source, i, p, r);
-        const d = Math.hypot(a.x - at.x, a.y - at.y);
-        if (d < bestPx) {
-          bestPx = d;
-          best = i;
-        }
-      }
-    }
-  }
-  return { index: best, distance: bestPx * perPixel };
-}
-
-// Speed by hour for one cell, drawn as bars on the same colour ramp as the map
-// so a red bar in the sparkline means the same thing as a red dot on it.
-function sparkline(values, hours, selected) {
-  const known = values.filter((v) => v >= 0);
+// Ride time by hour for one leg, bar height the time and colour its delay, so a
+// red bar in the sparkline means the same thing as a red leg on the map.
+function sparkline(leg, metric, off) {
+  const hours = index.hours;
+  const values = hours.map((h) => {
+    const t = legTime(leg, RIDES.hourly.get(String(h).padStart(2, "0")), metric);
+    return t ? t.seconds : null;
+  });
+  const known = values.filter((v) => v != null);
   if (!known.length) return "";
   const top = Math.max(...known);
+  const selected = els.allHours.checked ? -1 : Number(els.hour.value);
   const width = 8;
   const gap = 1.6;
   const height = 34;
   const bars = values
     .map((value, i) => {
       const x = (i * (width + gap)).toFixed(1);
-      if (value < 0) {
+      if (value == null) {
         return `<rect x="${x}" y="${height - 1}" width="${width}" height="1" fill="#c9d0d9"/>`;
       }
       const h = Math.max(1.5, (value / top) * height);
+      const fill = off ? delayColor(value / off.seconds - 1) : "#9aa5b1";
       const marked = hours[i] === selected;
       return (
         `<rect x="${x}" y="${(height - h).toFixed(1)}" width="${width}" height="${h.toFixed(1)}"` +
-        ` fill="${speedColor(value)}"${marked ? ' stroke="#16202a" stroke-width="1.2"' : ""}/>`
+        ` fill="${fill}"${marked ? ' stroke="#16202a" stroke-width="1.2"' : ""}>` +
+        `<title>${hours[i]}:00 · ${formatDuration(value)}</title></rect>`
       );
     })
     .join("");
   const span = values.length * (width + gap) - gap;
   return (
     `<svg class="spark" viewBox="0 0 ${span} ${height + 12}" width="${span}" ` +
-    `height="${height + 12}" role="img" aria-label="Speed by hour of day">` +
+    `height="${height + 12}" role="img" aria-label="Ride time by hour of day">` +
     `${bars}<text x="0" y="${height + 10}" class="spark-tick">${hours[0]}:00</text>` +
     `<text x="${span}" y="${height + 10}" text-anchor="end" class="spark-tick">` +
     `${hours[hours.length - 1]}:00</text></svg>`
   );
 }
 
-async function cellProfile(latlng, heading) {
-  const profile = await fetchSelection(profileKey());
-  if (!profile.lat.length) return "";
-  const hit = nearestIndex(profile, latlng, index.cell_size_m, heading);
-  if (hit.index < 0 || hit.distance > index.cell_size_m) return "";
-  const width = profile.hours.length;
-  const values = profile.q.slice(hit.index * width, (hit.index + 1) * width);
-  const selected = els.allHours.checked ? -1 : Number(els.hour.value);
-  return sparkline(values, profile.hours, selected);
-}
-
-function popupContent(source, i, spark) {
-  const metric = activeMetric();
-  const value = speedValues(source)[i];
-  const rows = index.metrics
-    .filter((m) => m.key !== metric.key && source[m.key])
-    .map((m) => `<span>${m.label}</span><span>${format(source[m.key][i], m)} ${m.unit}</span>`)
+function popupContent(leg) {
+  const metric = els.metric.value;
+  const data = currentRides();
+  const t = legTime(leg, data, metric);
+  const off = legOffPeak(leg, metric);
+  const stops = RIDES.paths.stops;
+  const name = (id) => (stops[id] ? stops[id][2] : id);
+  const label = els.metric.selectedOptions[0].textContent.toLowerCase();
+  const offRow = off
+    ? `<span>Off-peak (${off.hour}:00)</span><span>${formatDuration(off.seconds)}</span>` +
+      (t ? `<span>Delay</span><span>${formatPercent(t.seconds / off.seconds - 1)}</span>` : "")
+    : `<span>Off-peak</span><span>too few rides</span>`;
+  // Each route on its own: a shared leg can hide one route that stops longer.
+  const routes = leg.members
+    .map(({ r, i }) => {
+      const route = RIDES.paths.routes[r];
+      const legs = data && data[`${route.route}|${route.dir}`];
+      const v = legs && legs[metric] && legs[metric][i];
+      return v == null
+        ? ""
+        : `<span>${route.name}</span><span>${formatDuration(v)} · ${legs.n[i]} rides</span>`;
+    })
     .join("");
-  // Every figure in here is for one direction of travel only, which is the
-  // whole point of splitting them: the approach to a junction and the run out
-  // of it are different roads at rush hour.
-  const heading = Array.isArray(source.dir)
-    ? `<div class="stat-label">traffic heading ${compass(source.dir[i])} · ` +
-      `${Math.round(source.dir[i])}°</div>`
-    : "";
   return (
-    `<div class="cell-popup"><b>${format(value, metric)} ${metric.unit}</b>` +
-    `<div class="stat-label">${metric.label}</div>${heading}` +
-    `<div class="stats">${rows}` +
-    `<span>Samples</span><span>${source.n[i].toLocaleString()}</span></div>` +
-    `<div class="spark-slot">${spark}</div></div>`
+    `<div class="cell-popup"><b>${t ? formatDuration(t.seconds) : "—"}</b>` +
+    `<div class="stat-label">${name(leg.a)} → ${name(leg.b)}<br>${label}, ` +
+    `${t ? t.n.toLocaleString() : 0} rides, stop to stop incl. dwell</div>` +
+    `<div class="stats">${offRow}${routes}</div>` +
+    `<div class="spark-slot">${sparkline(leg, metric, off)}</div></div>`
   );
 }
 
@@ -674,35 +625,11 @@ map.on("click", (e) => {
     rulerAddPoint(e.latlng);
     return;
   }
-  if (!current) return;
-  // Held for the profile callback below: by the time it lands the slider may
-  // have moved, and an index into the new payload is a different cell.
-  const source = current;
-  // A fixed metre tolerance is unclickable when zoomed in and grabs the wrong
-  // cell when zoomed out, so allow a constant ~12 px of slop instead.
-  const tolerance = Math.max(index.cell_size_m, metresPerPixel() * 12);
-  const hit = nearestArrow(source, e.latlng, tolerance);
-  if (hit.index < 0 || hit.distance > tolerance) return;
-
-  const at = L.latLng(source.lat[hit.index], source.lon[hit.index]);
-  const popup = L.popup()
-    .setLatLng(at)
-    .setContent(popupContent(source, hit.index, "speed by hour…"))
-    .openOn(map);
-
-  // The profile file is a megabyte or so, so it loads on the first click and is
-  // reused after that; the popup opens immediately either way. It has to go
-  // back through setContent rather than patching the DOM — Leaflet re-renders
-  // the popup from the string it was given, so a patched node is wiped on the
-  // next update and the popup never resizes around it.
-  cellProfile(at, Array.isArray(source.dir) ? source.dir[hit.index] : null)
-    .then((svg) => {
-      if (map.hasLayer(popup)) {
-        popup.setContent(popupContent(source, hit.index, svg || "no hourly profile here"));
-      }
-    })
-    .catch(() => {});
+  const leg = nearestLeg(map.latLngToContainerPoint(e.latlng));
+  if (!leg) return;
+  L.popup().setLatLng(e.latlng).setContent(popupContent(leg)).openOn(map);
 });
+
 
 /* ---------- ruler ---------- */
 
@@ -727,25 +654,9 @@ function formatDuration(seconds) {
 
 /* ---------- real rides ---------- */
 
-// The drawn line above is an integral of the speed field: it prices a shape,
-// not a journey, and by construction it cannot see a bus standing at a stop.
-// This block answers the other question — of the buses that actually run past
-// both ends, how long did they take between them — from stop-to-stop times
-// measured on the archived vehicles themselves, dwell and lights included.
-const RIDES = {
-  paths: null,
-  pathsMonth: null,
-  data: null,
-  key: null,
-  highlight: null,
-  loading: false,
-  expanded: false,
-  // Every hour of the same month and day type, for the off-peak comparison.
-  hourly: null,
-  hourlyKey: null,
-  hourlyLoading: false,
-};
-
+// Of the buses that actually run past both ends, how long did they take
+// between them — from stop-to-stop times measured on the archived vehicles
+// themselves, dwell and lights included.
 // How far a clicked point may be from the route's own line before that route is
 // not really passing it. This is distance to the street the bus drives, not to a
 // stop, so it is far tighter than a walking radius would be — at 250 m a route
@@ -760,21 +671,12 @@ const RIDE_ROWS = 4;
 // 05:00 with three buses in it is a lucky draw, not the road at its emptiest.
 const OFFPEAK_MIN_RIDES = 10;
 
-function ridesKey() {
-  return `rides-${els.month.value}-${els.daytype.value}-${hourKey()}`;
-}
-
-function hourlyKey() {
-  return `${els.month.value}-${els.daytype.value}`;
-}
-
 /**
  * The quickest hour of the day over the same stretch, on the same statistic —
  * the ride as it goes when the road is at its emptiest. Null until every hour
  * has loaded, or when no hour has enough rides to be believed.
  */
 function offPeak(key, stopDist, from, to, metric) {
-  if (!RIDES.hourly || RIDES.hourlyKey !== hourlyKey()) return null;
   let best = null;
   for (const [hour, data] of RIDES.hourly) {
     const legs = data[key];
@@ -790,25 +692,6 @@ function formatDelta(seconds) {
   const total = Math.round(Math.abs(seconds));
   const sign = seconds < 0 ? "−" : "+";
   return `${sign} ${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
-
-// Average or median of the observed leg times, whichever the dropdown says.
-//
-// The median is the default, matching the map; the average is the one to
-// trust for a long journey. Only the mean is additive: the sum of a route's
-// per-leg means is the mean of the whole ride, while the sum of its per-leg
-// medians is *not* the median of the ride — legs are right-skewed and a bus late on one is late on the next, so
-// the medians add up short. Measured on Рясне-2 → Ковча at 08:00, ten legs:
-// the summed medians said 22 minutes where the vehicles themselves took 25–26,
-// while the summed means said 25.
-function rideMetric() {
-  return els.rulerMetric.value === "med" ? "med" : "avg";
-}
-
-function metresBetween(lat1, lon1, lat2, lon2) {
-  const dy = (lat1 - lat2) * METRES_PER_DEG_LAT;
-  const dx = (lon1 - lon2) * METRES_PER_DEG_LAT * Math.cos((lat1 * Math.PI) / 180);
-  return Math.sqrt(dx * dx + dy * dy);
 }
 
 /**
@@ -950,13 +833,14 @@ function timeAlongRoute(legs, stopDist, from, to, metric) {
  * different set of legs, in the other direction.
  */
 function rideOptions(a, b) {
-  if (!RIDES.paths || !RIDES.data) return [];
-  const metric = rideMetric();
+  const data = currentRides();
+  if (!data) return [];
+  const metric = els.metric.value;
   const out = [];
 
   for (const route of RIDES.paths.routes) {
     const key = `${route.route}|${route.dir}`;
-    const legs = RIDES.data[key];
+    const legs = data[key];
     if (!legs) continue;
     // Both points have to be on this route's street, and in the order it drives
     // them: the same two points are a different journey the other way round.
@@ -1092,7 +976,7 @@ function ridesReadout() {
   }
   // Stale figures from the previous hour are worse than none while the new
   // ones are on their way.
-  if (!RIDES.paths || !RIDES.data || RIDES.key !== ridesKey()) {
+  if (!currentRides()) {
     return `<div class="ride-empty">looking for buses…</div>`;
   }
 
@@ -1109,7 +993,7 @@ function ridesReadout() {
   const limit = RIDES.expanded ? options.length : RIDE_ROWS;
   const shown = options.slice(0, limit).map(rideRow).join("");
   const rest = options.length - limit;
-  const source = rideMetric() === "avg" ? "average" : "median";
+  const source = els.metric.selectedOptions[0].textContent.toLowerCase();
   const more =
     rest > 0
       ? `<button type="button" class="ride-more" data-expand="1">` +
@@ -1122,48 +1006,6 @@ function ridesReadout() {
     shown +
     more
   );
-}
-
-// The route list and the geometry are only fetched once the ruler is used, and
-// the geometry once per month — each month is laid out along its own timetable.
-async function loadRides() {
-  const key = ridesKey();
-  // Dragging a point redraws on every frame; without the flag each frame would
-  // queue another pair of loads for the same selection.
-  RIDES.loading = true;
-  try {
-    const month = els.month.value;
-    const [paths, data] = await Promise.all([
-      RIDES.pathsMonth === month ? RIDES.paths : fetchSelection(`paths-${month}`),
-      RIDES.key === key && RIDES.data ? RIDES.data : fetchSelection(key),
-    ]);
-    RIDES.paths = paths;
-    RIDES.pathsMonth = month;
-    RIDES.data = data;
-    RIDES.key = key;
-  } finally {
-    RIDES.loading = false;
-  }
-}
-
-// The off-peak figure needs every hour of the day, so it follows the answer
-// rather than holding it up; each hour is a small file, and the ones the
-// slider has already visited come from the cache.
-async function loadHourly() {
-  const key = hourlyKey();
-  RIDES.hourlyLoading = true;
-  try {
-    const hours = index.hours.map((h) => String(h).padStart(2, "0"));
-    // allSettled: an hour that fails to load drops out of the comparison
-    // rather than being asked for again on every frame of a drag.
-    const data = await Promise.allSettled(hours.map((h) => fetchSelection(`rides-${key}-${h}`)));
-    RIDES.hourly = new Map(
-      hours.flatMap((h, i) => (data[i].status === "fulfilled" ? [[h, data[i].value]] : [])),
-    );
-    RIDES.hourlyKey = key;
-  } finally {
-    RIDES.hourlyLoading = false;
-  }
 }
 
 // Which way you are travelling decides which routes can carry you, so the line
@@ -1201,29 +1043,6 @@ function rulerRedraw() {
   // with it rather than hanging over a line that has since moved.
   highlightRide(null);
   els.rides.innerHTML = ridesReadout();
-  if (index.rides && RULER.points.length >= 2 && !RIDES.loading && RIDES.key !== ridesKey()) {
-    // Fetched on demand, and only the first time a line is drawn — the ride
-    // files and the route geometry are dead weight for a visitor who only ever
-    // looks at the map.
-    // A full redraw rather than a repaint: the selection may have moved on
-    // while this was in flight, and the load it blocked has to start now.
-    loadRides()
-      .then(rulerRedraw)
-      .catch(() => {
-        els.rides.innerHTML = `<div class="ride-empty">ride times unavailable</div>`;
-      });
-  }
-  if (
-    index.rides &&
-    RULER.points.length >= 2 &&
-    !RIDES.hourlyLoading &&
-    RIDES.hourlyKey !== hourlyKey()
-  ) {
-    // A missing hour only costs the comparison, never the ride time itself.
-    loadHourly()
-      .then(rulerRedraw)
-      .catch(() => {});
-  }
 }
 
 function rulerAddPoint(latlng) {
@@ -1308,9 +1127,9 @@ const RulerControl = L.Control.extend({
 });
 
 function rulerBoot() {
-  // The dots are a canvas inside the overlay pane, and whatever is appended
+  // The legs are a canvas inside the overlay pane, and whatever is appended
   // there last wins — which was the canvas, burying the ruler's own lines under
-  // forty thousand dots. Its own pane above them settles it.
+  // the network. Its own pane above it settles it.
   map.createPane(RULER_PANE).style.zIndex = 620;
   RULER.layer = L.layerGroup().addTo(map);
   RULER.line = L.polyline([], {
@@ -1323,17 +1142,6 @@ function rulerBoot() {
   }).addTo(RULER.layer);
   new RulerControl({ position: "topright" }).addTo(map);
 
-  for (const metric of (index.rides && index.rides.metrics) || []) {
-    const option = document.createElement("option");
-    option.value = metric.key;
-    option.textContent = metric.label;
-    els.rulerMetric.append(option);
-  }
-  if ([...els.rulerMetric.options].some((o) => o.value === "med")) {
-    els.rulerMetric.value = "med";
-  }
-
-  els.rulerMetric.addEventListener("change", rulerRedraw);
   els.rulerClear.addEventListener("click", rulerClear);
 
   // Picking a route draws the stretch of it being timed, which is the only way
@@ -1397,18 +1205,15 @@ async function boot() {
   // open the map to see. Falls back to all days if the split is missing.
   els.daytype.value = index.daytypes.some((d) => d.key === "wd") ? "wd" : "all";
 
-  for (const metric of index.metrics) {
+  for (const metric of index.rides.metrics) {
     const option = document.createElement("option");
     option.value = metric.key;
     option.textContent = metric.label;
     els.metric.append(option);
   }
-  // Median by default: the map is for how a street usually flows, and the mean
-  // is dragged down by the odd long wait at a light. The ride timer keeps the
-  // mean, since only that adds up along a journey.
-  if (index.metrics.some((m) => m.key === "med")) els.metric.value = "med";
-
-  KMH_METRIC.scale = { low: index.scale.low_kmh, high: index.scale.high_kmh };
+  // Median by default: how a leg usually goes, not dragged by the odd long
+  // wait. Only the average adds up along a journey, which the ruler says.
+  if (index.rides.metrics.some((m) => m.key === "med")) els.metric.value = "med";
 
   const hours = index.hours;
   els.hour.min = String(hours[0]);
@@ -1421,13 +1226,12 @@ async function boot() {
   syncHourLabel();
   rulerBoot();
   els.note.textContent =
-    `Buses only. Positions within ${index.stop_radius_m} m of a stop on the ` +
-    `vehicle's own trip are excluded, so this is running speed. ` +
-    (index.heading_bins ? `Each direction of travel is counted on its own. ` : "") +
-    `${index.days.first} … ${index.days.last}, ` +
-    `${index.samples.toLocaleString()} samples.`;
+    `Buses only. Each leg is timed stop to stop on the archived vehicles, ` +
+    `standing at stops and waiting at lights included, and coloured against ` +
+    `its own quickest hour of the day. ${index.days.first} … ${index.days.last}, ` +
+    `${index.samples.toLocaleString()} timed legs.`;
 
-  dots.addTo(map);
+  legsLayer.addTo(map);
   await render();
 
   els.month.addEventListener("change", () => {
@@ -1443,20 +1247,22 @@ async function boot() {
     syncHourLabel();
     render();
   });
-  // Every statistic is already in the loaded payload, so this is a repaint.
+  // Every hour and statistic is already loaded, so this is a repaint.
   els.metric.addEventListener("change", () => {
     writeUrl();
-    paintLegend();
-    dots.redraw();
-    if (current) els.subtitle.textContent = describe(current.lat.length);
+    map.closePopup();
+    repaint();
   });
 
-  // Panning is not a data change, so it only needs the URL rewritten — and not
-  // on every frame of a drag.
+  // Panning is not a data change: the URL and the leg count are rewritten,
+  // and not on every frame of a drag.
   let pending = null;
   map.on("moveend", () => {
     clearTimeout(pending);
-    pending = setTimeout(writeUrl, 300);
+    pending = setTimeout(() => {
+      writeUrl();
+      if (currentRides()) els.subtitle.textContent = describe();
+    }, 300);
   });
 }
 

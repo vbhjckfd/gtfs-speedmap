@@ -1,9 +1,15 @@
 # gtfs-speedmap
 
-An OSM map of **bus running speed** in Lviv, one arrow per 25 m cell **per direction of travel**,
-coloured green (fast) to red (slow), with an hour-of-day slider, a month picker and a
-weekday/weekend split — and a ruler that answers the other question, **how long the ride takes**,
-from the buses' own stop-to-stop times.
+An OSM map of **bus ride time** in Lviv: every stop-to-stop leg of the network, drawn along the
+route's own line, one per direction of travel, coloured by how much longer it takes at the chosen
+hour than at **its own quickest hour of the day** — green +0%, red +100% and up. Hour-of-day
+slider, month picker, weekday/weekend split; clicking a leg shows its time per route and hour by
+hour. A ruler times the ride between any two points from the same stop-to-stop measurements.
+
+Legs are timed arrival to arrival, so dwell and lights are included. Where routes share a leg
+their times are pooled, weighted by ride count; the off-peak is the quickest hour with at least
+ten rides. The speed pass (`agg`/`hist`, sections below) still runs at ingest but no longer feeds
+the map.
 
 Built from the GTFS-RT vehicle-position snapshots that
 [`gtfs-collector`](../gtfs-collector) archives to Cloudflare R2.
@@ -21,8 +27,8 @@ data/hist/YYYY-MM-DD.parquet                data/seghist/YYYY-MM-DD.parquet
         │  python -m speedmap.sync push     ⇄  R2 derived/{agg,hist}/
         │  python -m speedmap.build_web
         ▼
-web/data/{month}-{days}-{hour}.json         what the map fetches
-web/data/rides-{month}-{days}-{hour}.json   what the ruler fetches
+web/data/paths-{month}.json                 route lines and stop order
+web/data/rides-{month}-{days}-{hour}.json   per-leg times — the map and the ruler
         │  make deploy
         ▼
 Cloudflare Worker (assets-only)

@@ -277,9 +277,6 @@ input[type="range"] {
   text-decoration: underline;
 }
 
-.ruler-field {
-  margin: 9px 0 8px;
-}
 
 /* The toggle sits with the zoom buttons, so it borrows their chrome. */
 .ruler-toggle a {

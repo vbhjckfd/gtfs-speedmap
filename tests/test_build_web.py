@@ -1,95 +1,42 @@
-"""Percentiles from histograms, payload shape, day-type classification."""
+"""Percentiles from histograms, ride payload shape, day-type classification."""
 
 from __future__ import annotations
-
-import math
 
 import pandas as pd
 import pytest
 
 from speedmap.build_web import (
-    CELL_KEYS,
-    CELL_SUMS,
-    _medians,
     _month_part,
-    _payload,
     _percentile,
     _percentiles,
-    _profile,
     _rides,
     daytype_of,
-    free_flow,
-    install_groups,
     month_of,
     month_window,
-    regroup,
 )
-from speedmap.grid import heading_bin
-from speedmap.config import PROFILE_MIN_HOURS, PROFILE_MIN_SAMPLES, SEG_MIN_OBS
+from speedmap.config import SEG_MIN_OBS
+
+KEYS = ["route_id", "from_stop"]
 
 
 def bins(rows: list[tuple[int, int, int, int]]) -> pd.DataFrame:
-    """rows of (cx, cy, bin, count), all in heading bin 0."""
-    return pd.DataFrame(
-        [("2026-07", 8, cx, cy, 0, b, n) for cx, cy, b, n in rows],
-        columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
-    )
-
-
-def cells(rows: list[tuple], heading: float = 0.0) -> pd.DataFrame:
-    """rows of (cx, cy, n, sum_speed, sum_lat, sum_lon), all one heading."""
-    sin_b, cos_b = math.sin(math.radians(heading)), math.cos(math.radians(heading))
-    return pd.DataFrame(
-        [
-            ("2026-07", 8, cx, cy, heading_bin(heading), n, speed, lat, lon, sin_b * n, cos_b * n)
-            for cx, cy, n, speed, lat, lon in rows
-        ],
-        columns=["month", "hour", "cx", "cy", "dir", *CELL_SUMS],
-    )
+    """rows of (route, stop, bin, count), at one bin per unit for readable figures."""
+    return pd.DataFrame(rows, columns=[*KEYS, "bin", "n"])
 
 
 def test_median_is_the_bin_holding_the_middle_sample():
-    # Speeds: 2 at 10 km/h, 1 at 30, 2 at 50 → middle sample sits in bin 30.
-    result = _medians(bins([(0, 0, 10, 2), (0, 0, 30, 1), (0, 0, 50, 2)]))
-    assert result.loc[(0, 0, 0)] == pytest.approx(30.5)
-
-
-def test_median_ignores_a_long_slow_tail_that_drags_the_mean():
-    # 9 samples at 30 km/h, 21 stuck at 0: mean 9 km/h, median 0.
-    result = _medians(bins([(1, 1, 30, 9), (1, 1, 0, 21)]))
-    assert result.loc[(1, 1, 0)] == pytest.approx(0.5)
-
-    # Flip the balance and the median follows the bulk, not the outliers.
-    result = _medians(bins([(1, 1, 30, 21), (1, 1, 0, 9)]))
-    assert result.loc[(1, 1, 0)] == pytest.approx(30.5)
+    # 2 in bin 10, 1 in bin 30, 2 in bin 50: the middle sample sits in bin 30.
+    result = _percentile(bins([(0, 0, 10, 2), (0, 0, 30, 1), (0, 0, 50, 2)]), 0.5, keys=KEYS, width=1)
+    assert result.loc[(0, 0)] == pytest.approx(30.5)
 
 
 def test_median_with_even_sample_count_picks_the_lower_middle():
-    result = _medians(bins([(2, 2, 10, 1), (2, 2, 20, 1)]))
-    assert result.loc[(2, 2, 0)] == pytest.approx(10.5)
+    result = _percentile(bins([(2, 2, 10, 1), (2, 2, 20, 1)]), 0.5, keys=KEYS, width=1)
+    assert result.loc[(2, 2)] == pytest.approx(10.5)
 
 
 def test_medians_of_empty_histogram_is_empty():
-    assert _medians(bins([])).empty
-
-
-def test_payload_carries_both_statistics():
-    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
-    # 10 samples: 8 slow, 2 fast — mean 9 km/h, median in the slow bin.
-    payload = _payload(frame, bins([(0, 0, 2, 8), (0, 0, 37, 2)]))
-
-    assert payload["v"] == [pytest.approx(9.0)]  # 25 m/s summed over 10 → 2.5 m/s
-    assert payload["med"] == [pytest.approx(2.5)]
-    assert payload["n"] == [10]
-    assert payload["lat"] == [pytest.approx(49.84)]
-
-
-def test_payload_without_histograms_still_builds():
-    """Aggregates predating the histogram files must not break the build."""
-    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
-    payload = _payload(frame, bins([]))
-    assert payload["v"] == [pytest.approx(9.0)]
-    assert payload["med"] == [None]
+    assert _percentile(bins([]), 0.5, keys=KEYS).empty
 
 
 # --- percentiles ---------------------------------------------------------
@@ -100,77 +47,34 @@ def test_percentiles_bracket_the_distribution():
     # so the 15th sample is in the slow bin, the 50th in the middle one and the
     # 85th has already crossed into the fast one.
     b = bins([(0, 0, 5, 20), (0, 0, 20, 60), (0, 0, 40, 20)])
-    q = _percentiles(b, (0.15, 0.5, 0.85))
-    assert q[0.15].loc[(0, 0, 0)] == pytest.approx(5.5)
-    assert q[0.5].loc[(0, 0, 0)] == pytest.approx(20.5)
-    assert q[0.85].loc[(0, 0, 0)] == pytest.approx(40.5)
+    q = _percentiles(b, (0.15, 0.5, 0.85), keys=KEYS, width=1)
+    assert q[0.15].loc[(0, 0)] == pytest.approx(5.5)
+    assert q[0.5].loc[(0, 0)] == pytest.approx(20.5)
+    assert q[0.85].loc[(0, 0)] == pytest.approx(40.5)
 
     # Shrink the fast tail and the 85th falls back into the middle bin:
     # cumulative 20 / 80 of 85, and the 73rd sample is where it lands.
     b = bins([(0, 0, 5, 20), (0, 0, 20, 60), (0, 0, 40, 5)])
-    assert _percentile(b, 0.85).loc[(0, 0, 0)] == pytest.approx(20.5)
+    assert _percentile(b, 0.85, keys=KEYS, width=1).loc[(0, 0)] == pytest.approx(20.5)
 
 
 def test_percentile_never_falls_off_the_bottom():
     """A tiny q must still land on the first bin, not on nothing."""
     b = bins([(0, 0, 12, 1), (0, 0, 30, 1)])
-    assert _percentile(b, 0.01).loc[(0, 0, 0)] == pytest.approx(12.5)
+    assert _percentile(b, 0.01, keys=KEYS, width=1).loc[(0, 0)] == pytest.approx(12.5)
 
 
 def test_percentile_of_a_single_bin_is_that_bin():
     b = bins([(3, 3, 7, 40)])
     for q in (0.15, 0.5, 0.85):
-        assert _percentile(b, q).loc[(3, 3, 0)] == pytest.approx(7.5)
+        assert _percentile(b, q, keys=KEYS, width=1).loc[(3, 3)] == pytest.approx(7.5)
 
 
 def test_percentiles_share_one_pass_with_the_single_shot_version():
     b = bins([(0, 0, 4, 3), (0, 0, 9, 11), (0, 0, 31, 6), (1, 0, 15, 2)])
-    batched = _percentiles(b, (0.15, 0.5, 0.85))
+    batched = _percentiles(b, (0.15, 0.5, 0.85), keys=KEYS, width=1)
     for q in (0.15, 0.5, 0.85):
-        pd.testing.assert_series_equal(batched[q], _percentile(b, q))
-
-
-# --- free-flow reference and the relative metric --------------------------
-
-
-def test_free_flow_pools_every_hour_and_day_type():
-    """The reference has to be global, or the colours shift as the slider moves."""
-    slices = {
-        ("2026-07", "wd"): bins([(0, 0, 10, 90)]).rename(columns={}),
-        ("2026-07", "we"): bins([(0, 0, 40, 10)]).rename(columns={}),
-    }
-    reference = free_flow(slices)
-    # 100 samples pooled: the 85th sits in the slow bin, which one slice alone
-    # would never have said.
-    assert reference.loc[(0, 0, 0)] == pytest.approx(10.5)
-
-
-def test_cells_below_the_free_flow_floor_get_no_ratio():
-    """A ratio against a 4 km/h reference is noise over noise."""
-    slices = {("2026-07", "wd"): bins([(0, 0, 4, 50), (1, 1, 30, 50)])}
-    reference = free_flow(slices)
-    assert (0, 0, 0) not in reference.index
-    assert reference.loc[(1, 1, 0)] == pytest.approx(30.5)
-
-
-def test_payload_rel_is_median_over_the_reference():
-    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
-    reference = pd.Series(
-        [40.5], index=pd.MultiIndex.from_tuples([(0, 0, 0)], names=["cx", "cy", "dir"])
-    )
-    payload = _payload(frame, bins([(0, 0, 20, 10)]), reference)
-    assert payload["med"] == [pytest.approx(20.5)]
-    assert payload["rel"] == [pytest.approx(round(20.5 / 40.5, 2))]
-    assert payload["spread"] == [pytest.approx(0.0)]
-
-
-def test_payload_rel_is_null_without_a_reference():
-    frame = cells([(0, 0, 10, 25.0, 498.4, 240.3)])
-    payload = _payload(frame, bins([(0, 0, 20, 10)]), pd.Series(dtype=float))
-    assert payload["rel"] == [None]
-
-
-# --- day types -----------------------------------------------------------
+        pd.testing.assert_series_equal(batched[q], _percentile(b, q, keys=KEYS, width=1))
 
 
 def test_daytype_splits_the_week_at_saturday():
@@ -179,42 +83,6 @@ def test_daytype_splits_the_week_at_saturday():
 
 
 # --- hourly profile ------------------------------------------------------
-
-
-def cells_by_hour(rows: list[tuple[int, int, int]]) -> pd.DataFrame:
-    """rows of (hour, n, speed_mps), all for one cell."""
-    return pd.DataFrame(
-        [(hour, 0, 0, 0, n, speed * n, 49.84 * n, 24.03 * n, 0.0, float(n)) for hour, n, speed in rows],
-        columns=["hour", "cx", "cy", "dir", *CELL_SUMS],
-    )
-
-
-def test_profile_reports_speed_per_hour():
-    hours = [5, 6, 7, 8, 9, 10]
-    rows = [(hour, 10, 5.0) for hour in hours]
-    rows[2] = (7, 10, 2.5)  # a slow hour
-    profile = _profile(cells_by_hour(rows), hours)
-    assert profile["q"] == [18, 18, 9, 18, 18, 18]
-    assert profile["hours"] == hours
-
-
-def test_profile_drops_cells_measured_in_too_few_hours():
-    """A two-bar sparkline reads as 'no buses at 14:00', which is not what it means."""
-    hours = list(range(5, 5 + PROFILE_MIN_HOURS + 1))
-    thin = cells_by_hour([(hour, 10, 5.0) for hour in hours[: PROFILE_MIN_HOURS - 1]])
-    assert _profile(thin, hours)["lat"] == []
-
-    thick = cells_by_hour([(hour, 10, 5.0) for hour in hours[:PROFILE_MIN_HOURS]])
-    assert len(_profile(thick, hours)["lat"]) == 1
-
-
-def test_profile_marks_unmeasured_hours_rather_than_guessing():
-    hours = list(range(5, 5 + PROFILE_MIN_HOURS + 1))
-    rows = [(hour, 10, 5.0) for hour in hours]
-    rows[1] = (hours[1], PROFILE_MIN_SAMPLES - 1, 5.0)  # too thin to report
-    profile = _profile(cells_by_hour(rows), hours)
-    assert profile["q"][1] == profile["no_data"]
-    assert profile["q"][0] == 18
 
 
 # --- Real ride times ------------------------------------------------------
@@ -274,101 +142,6 @@ def test_rides_of_nothing_is_nothing():
     assert _rides(legs([]), leg_bins([]), RIDE_PATHS) == {}
 
 
-# --- direction of travel --------------------------------------------------
-
-
-def test_payload_reports_the_heading_of_its_traffic():
-    payload = _payload(cells([(0, 0, 10, 25.0, 498.4, 240.3)], heading=90.0), bins([]))
-    assert payload["dir"] == [90]
-
-
-def test_mean_heading_survives_the_north_seam():
-    """Averaging 350° and 10° in degrees gives due south; as vectors, due north."""
-    frame = pd.DataFrame(
-        [
-            ("2026-07", 8, 0, 0, 0, 5, 40.0, 249.2, 120.15, 5 * math.sin(math.radians(a)),
-             5 * math.cos(math.radians(a)))
-            for a in (350.0, 10.0)
-        ],
-        columns=["month", "hour", "cx", "cy", "dir", *CELL_SUMS],
-    )
-    assert _payload(frame, bins([]))["dir"] == [0]
-
-
-def test_the_two_directions_of_one_square_keep_their_own_figures():
-    """The whole point of the split: one square, two speeds, two arrows."""
-    north = cells([(0, 0, 10, 20.0, 498.4, 240.3)], heading=0.0)
-    south = cells([(0, 0, 10, 100.0, 498.4, 240.3)], heading=180.0)
-    payload = _payload(pd.concat([north, south], ignore_index=True), bins([]))
-
-    assert payload["dir"] == [0, 180]
-    assert payload["v"] == [pytest.approx(7.2), pytest.approx(36.0)]
-    assert payload["lat"] == [pytest.approx(49.84), pytest.approx(49.84)]
-
-
-# --- folding the heading bins into directions of travel -------------------
-
-
-def bins_of(*rows) -> pd.DataFrame:
-    """rows of (cx, cy, heading_bin, n) as a cell frame, one hour."""
-    return pd.concat(
-        [
-            pd.DataFrame(
-                [("2026-07", 8, cx, cy, b, n, 8.0 * n, 49.84 * n, 24.03 * n,
-                  n * math.sin(math.radians(b * 45)), n * math.cos(math.radians(b * 45)))],
-                columns=["month", "hour", "cx", "cy", "dir", *CELL_SUMS],
-            )
-            for cx, cy, b, n in rows
-        ],
-        ignore_index=True,
-    )
-
-
-def test_a_bend_collapses_into_the_direction_it_is_going():
-    """N, NE and E in one square are one street curving, not three streets."""
-    frame = bins_of((0, 0, 0, 40), (0, 0, 1, 30), (0, 0, 2, 10), (0, 0, 4, 25))
-    binned, squares, folded = install_groups({("2026-07", "wd"): frame})
-    assert (binned, squares, folded) == (4, 1, 2)
-
-    out = regroup(frame, ["hour", *CELL_KEYS])
-    assert len(out) == 2, "one row for the way there, one for the way back"
-    # The busiest bin leads, so the three bins within 90° of north merge; only
-    # the southbound one is left to travel against it.
-    by_group = dict(zip(out["dir"], out["n"]))
-    assert by_group == {0: 80, 1: 25}
-
-
-def test_the_fold_is_the_same_for_every_selection():
-    """Derived per payload, 08:00 would group its bins differently from all-day."""
-    universe = bins_of((0, 0, 0, 40), (0, 0, 2, 10), (0, 0, 4, 25))
-    install_groups({("2026-07", "wd"): universe})
-    # An hour in which the southbound lane happens to be the busier one still
-    # folds the same way, or its arrow would not match the free-flow reference.
-    quiet_hour = bins_of((0, 0, 2, 1), (0, 0, 4, 50))
-    out = regroup(quiet_hour, ["hour", *CELL_KEYS])
-    assert dict(zip(out["dir"], out["n"])) == {0: 1, 1: 50}
-
-
-def test_folding_leaves_a_one_way_square_alone():
-    frame = bins_of((0, 0, 3, 20), (0, 0, 4, 5))
-    install_groups({("2026-07", "wd"): frame})
-    out = regroup(frame, ["hour", *CELL_KEYS])
-    assert len(out) == 1
-    assert out["n"].tolist() == [25]
-
-
-def test_folded_histograms_follow_the_cells():
-    """A percentile has to be read off the same samples the arrow was drawn from."""
-    install_groups({("2026-07", "wd"): bins_of((0, 0, 0, 40), (0, 0, 1, 30))})
-    hist = pd.DataFrame(
-        [("2026-07", 8, 0, 0, 0, 20, 3), ("2026-07", 8, 0, 0, 1, 20, 7)],
-        columns=["month", "hour", "cx", "cy", "dir", "bin", "n"],
-    )
-    out = regroup(hist, ["hour", *CELL_KEYS, "bin"])
-    assert len(out) == 1
-    assert out["n"].tolist() == [10]
-
-
 def test_running_month_reads_in_whole_weeks():
     # Weekly runs land on the 8th, 15th and 22nd, so the data ends a day before.
     assert _month_part("2026-09", "2026-09-07") == "1/4"
@@ -390,8 +163,6 @@ def test_month_window_takes_the_folder_either_side():
 
 
 def test_files_belong_to_their_month():
-    assert month_of("2026-07-wd-08.json") == "2026-07"
-    assert month_of("profile-2026-07-all.json") == "2026-07"
     assert month_of("rides-2026-07-we-all.json") == "2026-07"
     assert month_of("paths-2026-07.json") == "2026-07"
     assert month_of("month-2026-07.json") == "2026-07"
