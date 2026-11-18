@@ -94,31 +94,41 @@
     <div id="map"></div>
 
     <div class="panel" id="panel">
-      <h1>Lviv bus ride times</h1>
-      <p class="sub" id="subtitle">loading…</p>
+      <div class="panel-head">
+        <h1 data-i18n="h1">Lviv bus ride times</h1>
+        <div class="lang-switch" role="group" aria-label="Language / Мова">
+          <button type="button" data-lang="en" title="English" aria-label="English" aria-pressed="false">
+            <svg viewBox="0 0 60 30" width="26" height="13" aria-hidden="true"><clipPath id="gb-t"><path d="M30 15h30v15zv15H0zH0V0zV0h30z"/></clipPath><path d="M0 0h60v30H0z" fill="#012169"/><path d="M0 0l60 30m0-30L0 30" stroke="#fff" stroke-width="6"/><path d="M0 0l60 30m0-30L0 30" clip-path="url(#gb-t)" stroke="#c8102e" stroke-width="4"/><path d="M30 0v30M0 15h60" stroke="#fff" stroke-width="10"/><path d="M30 0v30M0 15h60" stroke="#c8102e" stroke-width="6"/></svg>
+          </button>
+          <button type="button" data-lang="uk" title="Українська" aria-label="Українська" aria-pressed="false">
+            <svg viewBox="0 0 3 2" width="20" height="13" aria-hidden="true"><path fill="#0057b7" d="M0 0h3v1H0z"/><path fill="#ffd700" d="M0 1h3v1H0z"/></svg>
+          </button>
+        </div>
+      </div>
+      <p class="sub" id="subtitle" data-i18n="loading">loading…</p>
 
       <label class="field">
-        <span>Month</span>
+        <span data-i18n="month">Month</span>
         <select id="month"></select>
       </label>
 
       <label class="field">
-        <span>Days</span>
+        <span data-i18n="days">Days</span>
         <select id="daytype"></select>
       </label>
 
       <label class="field">
-        <span>Hour <b id="hour-label">—</b></span>
+        <span><span data-i18n="hour">Hour</span> <b id="hour-label">—</b></span>
         <input type="range" id="hour" min="0" max="23" step="1" />
       </label>
 
       <label class="checkbox">
         <input type="checkbox" id="all-hours" />
-        <span>Whole day</span>
+        <span data-i18n="wholeDay">Whole day</span>
       </label>
 
       <label class="field">
-        <span>Statistic</span>
+        <span data-i18n="statistic">Statistic</span>
         <select id="metric"></select>
       </label>
 
@@ -144,18 +154,18 @@
               d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
             />
           </svg>
-          Source, method &amp; contact on GitHub
+          <span data-i18n="credit">Source, method &amp; contact on GitHub</span>
         </a>
       </p>
     </div>
 
     <div class="ruler" id="ruler" hidden>
       <div class="ruler-head">
-        <span>Ride time</span>
-        <button type="button" id="ruler-clear">Clear</button>
+        <span data-i18n="rideTime">Ride time</span>
+        <button type="button" id="ruler-clear" data-i18n="clear">Clear</button>
       </div>
       <div class="rides" id="rides"></div>
-      <p class="note">
+      <p class="note" data-i18n="rulerNote">
         Real vehicles, timed between your two ends — anywhere on a route, not just at its
         stops. Standing at stops and waiting at lights is included; waiting for the bus to turn
         up is not. Averages add up to a journey and medians do not, so a long ride reads about
@@ -165,8 +175,8 @@
 
     <!-- Crawlable and screen-reader text; the map itself is a canvas. -->
     <section class="visually-hidden">
-      <h2>What this map shows</h2>
-      <p>
+      <h2 data-i18n="aboutH">What this map shows</h2>
+      <p data-i18n-html="aboutP">
         How long Lviv city buses take to get from one stop to the next, and how much longer
         that takes at a given hour than at the quickest hour of the day. Every stop-to-stop leg
         of the network is drawn along the street the buses drive, nudged to the right of its
@@ -175,8 +185,8 @@
         the hour slider to compare the morning peak against the evening, the month picker to
         compare months, and the day selector to separate weekdays from weekends.
       </p>
-      <h2>Delay against off-peak</h2>
-      <p>
+      <h2 data-i18n="delayH">Delay against off-peak</h2>
+      <p data-i18n-html="delayP">
         Each leg is compared only with itself: its off-peak time is its quickest hour of the
         day with at least ten timed rides. That separates congestion from distance — a long
         leg on the edge of town is not red for being long, and a short one in the centre is
@@ -186,8 +196,8 @@
         route that drives it, and its ride time hour by hour. The Statistic selector opens on
         the median, which is how a leg usually goes; the average is there too.
       </p>
-      <h2>Ride time between two points</h2>
-      <p>
+      <h2 data-i18n="pointsH">Ride time between two points</h2>
+      <p data-i18n-html="pointsP">
         Drop a point where you are and another where you are going, and the map lists every bus
         route that drives past both — in that order, with an arrow showing which way — timed on
         what its vehicles actually did between those two points. Neither end has to be a stop:
@@ -198,8 +208,8 @@
         Picking a route draws the stretch of it being timed. Waiting for the bus to turn up is
         not measured: the archive records where buses were, not when the next one leaves.
       </p>
-      <h2>How the figures are produced</h2>
-      <p>
+      <h2 data-i18n="howH">How the figures are produced</h2>
+      <p data-i18n-html="howP">
         Only buses are counted. Lviv trolleybuses are published in the schedule feed as
         <code>route_type=3</code>, the same code as buses, so they are excluded by route name;
         trams are excluded by route type. A leg is timed from the moment a vehicle comes
@@ -207,17 +217,18 @@
         so standing at the stop and waiting at lights are part of the leg. A leg seen on fewer
         than five rides in a slot is left out rather than guessed.
       </p>
-      <p>
+      <p data-i18n-html="sourceP">
         Source data: the Lviv public transport GTFS-RT feed, archived to object storage.
         Basemap: OpenStreetMap.
       </p>
     </section>
 
     <noscript>
-      <p style="padding: 1rem">This map needs JavaScript to draw the ride-time data.</p>
+      <p style="padding: 1rem">This map needs JavaScript to draw the ride-time data.<br />Ця карта потребує JavaScript, щоб намалювати дані.</p>
     </noscript>
 
     <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="i18n.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

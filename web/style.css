@@ -402,3 +402,37 @@ input[type="range"] {
     display: none;
   }
 }
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.lang-switch {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  margin-top: 1px;
+}
+
+.lang-switch button {
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  line-height: 0;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.lang-switch button:hover,
+.lang-switch button:focus-visible,
+.lang-switch button[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.lang-switch button[aria-pressed="true"] {
+  border-color: var(--border);
+}

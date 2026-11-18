@@ -1,5 +1,7 @@
 # gtfs-speedmap
 
+**English** · [Українська](README.uk.md) · [Methodology for data analysts](#methodology)
+
 An OSM map of **bus ride time** in Lviv. Every stop-to-stop leg of the network is drawn along the
 street the buses drive, one line per direction of travel, and coloured by how much longer it takes
 at the chosen hour than at **its own quickest hour of the day** — green +0%, red +100% and up.
@@ -182,6 +184,147 @@ absent and a route running every 40 minutes reads the same as one every 6. A par
 distance, so a stretch that stops short of a stop is charged an even share of that leg rather than
 the queue at its end. And the figures describe the buses that ran, not the timetable.
 
+## Methodology
+
+A reference for analysts who want to reuse the numbers or check them. Everything here is in
+[`segments.py`](src/speedmap/segments.py), [`build_web.py`](src/speedmap/build_web.py) and the
+viewer ([`web/app.js`](web/app.js)); the constants are in
+[`config.py`](src/speedmap/config.py).
+
+### Sources
+
+| Source | What it is | Fields used |
+|---|---|---|
+| GTFS-RT `VehiclePosition` feed of the Lviv operator | Archived every ~10 s by `gtfs-collector` into R2 `raw/YYYY-MM-DD/*.pb`, about 245 MB a day | header `timestamp`; per entity `vehicle.id`, `vehicle.timestamp`, `trip.trip_id`, `trip.route_id`, `position.latitude/longitude` |
+| GTFS static | Archived daily into R2 `static/YYYY-MM-DD/static.zip` | `routes.txt` (type, short name), `trips.txt` (route, `direction_id`, shape), `stop_times.txt` (stop order), `stops.txt`, `shapes.txt` |
+
+Each day is matched against the newest static archive dated on or before it; days before the first
+archive (2026-07-31) use the oldest one. A trip id missing from that archive is placed on its
+route and direction by the `_<direction>` suffix its id carries.
+
+Coverage: 2026-05-11 onwards, hours 05–23 local (`Europe/Kyiv`) — the collector does not poll
+00:00–04:00. About 110 route-directions.
+
+### Unit of observation
+
+One **leg**: one vehicle, on one run, travelling from stop *k* to stop *k+1* of its route's path.
+Its value is the time between the vehicle's **nearest approach** to each of the two stops, so
+dwell, signals and queues are all inside it. Arrival-to-arrival, so consecutive legs of one run
+tile it without gaps or overlap.
+
+### Pipeline, per day
+
+1. **Parse.** Entities without a position, trip id or route id are skipped.
+2. **Filter.**
+   - Bus only: `route_type = 3` and short name not starting `Тр`.
+   - Not stale: `header.timestamp − vehicle.timestamp ≤ STALE_MAX_S` (120 s).
+   - Deduplicated on `(vehicle.id, vehicle.timestamp)`.
+   - Inside the Lviv box (49.70–49.95 N, 23.85–24.20 E).
+3. **Project** to UTM 35N metres.
+4. **Runs.** Samples are grouped by `(vehicle, trip_id, route_id)`, sorted by time, and split
+   wherever the vehicle went silent for more than `RUN_GAP_MAX_S` (600 s).
+5. **Path.** Each route and `direction_id` has one canonical path: the longest ordered stop list
+   any of its trips runs. Every variant is timed against it. A short-turn never reaches the stops
+   it skips and adds nothing there.
+6. **Stop passes.** For each stop on the path, the sample nearest to it within
+   `STOP_PASS_RADIUS_M` (60 m) is that run's pass time. The pass time is the sample timestamp, not
+   an interpolation. At ~10 s polling this means up to a few seconds of error at each end.
+7. **Legs.** A leg is kept between consecutive path stops *k*, *k+1* that both have a pass,
+   unless:
+   - it runs backwards (`t₂ ≤ t₁`);
+   - it is longer than `SEG_MAX_S` (1800 s);
+   - it spans a sampling hole longer than `SEG_GAP_MAX_S` (240 s).
+8. **Key.** `(month, hour, route_id, direction, from_stop, to_stop)`. Month and hour are local
+   time at the **start** of the leg.
+9. **Store.**
+   - Count `n` and sum `sum_s` go to `data/seg/YYYY-MM-DD.parquet`.
+   - A histogram of 5-second bins (`bin = floor(seconds / SEG_BIN_S)`) goes to
+     `data/seghist/YYYY-MM-DD.parquet`.
+
+Filters drop about 1% of candidate legs. Day files are named by UTC date. Weekday or weekend is
+taken from that file name, so the few legs near midnight can land on the neighbouring day's type.
+
+### Aggregation
+
+`build_web` builds one month at a time. It sums the day files into
+`(month, daytype, hour, route, direction, pair)` cells, with `daytype ∈ {wd, we, all}` (Mon–Fri,
+Sat–Sun, both) and `hour ∈ {05…23, all}`. Per cell:
+
+| Statistic | Formula | Note |
+|---|---|---|
+| `n` | count of legs | number of rides |
+| `avg` | `sum_s / n`, rounded to 1 s | exact mean |
+| `med` | `(b + 0.5) × 5` s, where `b` is the first bin whose cumulative count reaches `max(1, ⌈n/2⌉)` | median to 5 s resolution; lower middle on an even count |
+
+A cell with `n < SEG_MIN_OBS` (5) is published as `null` with its `n` kept, so a hole stays
+visible instead of being filled.
+
+### What the viewer computes
+
+- **Pooling routes on one stop pair.** `t = Σ(tᵣ·nᵣ) / Σnᵣ` over the routes with a value, where
+  `tᵣ` is the route's `med` or `avg`. For `avg` this is the exact pooled mean. For `med` it is an
+  approximation (a ride-weighted mean of medians), because per-route histograms are not shipped.
+- **Off-peak.** The minimum pooled `t` over the month's hours (same daytype and statistic) where
+  pooled `n ≥ OFFPEAK_MIN_RIDES` (10).
+- **Delay.** `t_hour / t_offpeak − 1`. Colour runs green at 0, through amber, to red at
+  `DELAY_HIGH` (1.0) and above. Grey means no off-peak.
+- **Ruler total.** `Σ` of the route's leg values between the two points. Part-legs at each end
+  are taken pro rata by distance along the shape. Legs without data are filled with that route's
+  mean known leg and flagged. Use `avg` here: medians do not add (see
+  [above](#why-the-average-is-offered-beside-the-median)).
+
+### Published files
+
+All under `https://gtfs-speedmap.vbhjckfd.workers.dev/data/`, plain JSON, no auth:
+
+| File | Content |
+|---|---|
+| `index.json` | months, days covered, hours, sample count, thresholds (`stop_pass_radius_m`, `min_observations`, `bin_s`) |
+| `month-{YYYY-MM}.json` | days in the month, day counts per daytype, hours, leg count |
+| `paths-{YYYY-MM}.json` | `stops: {id: [lat, lon, name]}`; `routes: [{route, dir, name, path: [stop ids], shape?: [[lat, lon]], dist?: [m along shape per stop]}]` |
+| `rides-{YYYY-MM}-{wd\|we\|all}-{HH\|all}.json` | `{"route\|dir": {med: [...], avg: [...], n: [...]}}` — arrays are aligned to that route's `path`: element *i* is the leg `path[i] → path[i+1]`, in seconds |
+
+Example — weekday 08:00 legs of every route in October 2026, with stop names:
+
+```python
+import json, urllib.request
+base = "https://gtfs-speedmap.vbhjckfd.workers.dev/data/"
+get = lambda f: json.load(urllib.request.urlopen(base + f))
+paths, rides = get("paths-2026-10.json"), get("rides-2026-10-wd-08.json")
+for r in paths["routes"]:
+    legs = rides.get(f"{r['route']}|{r['dir']}")
+    if not legs:
+        continue
+    for i, (a, b) in enumerate(zip(r["path"], r["path"][1:])):
+        print(r["name"], paths["stops"][a][2], "→", paths["stops"][b][2],
+              legs["med"][i], legs["avg"][i], legs["n"][i])
+```
+
+The raw per-day parquet (`data/seg`, `data/seghist`) is not public; it is the same numbers at
+finer grain (one row per day).
+
+### Validation
+
+The pipeline never reads `stop_times` arrival times, so the timetable is an independent check. On
+3 038 pairs present in both, measured ÷ scheduled is p10 0.53, **median 0.94**, p90 1.76. A
+ten-leg ride rebuilt from raw positions came within ~5% of the summed per-leg means (see
+[above](#why-the-average-is-offered-beside-the-median)).
+
+### Biases and limits
+
+- **Pass-time error.** With ~10 s polling and nearest-sample timing, each end is off by up to a
+  few seconds. That is noise on a ~110 s median leg, but material on very short legs.
+- **Survivorship.** Legs with a feed hole over 240 s, or over 30 min long, are dropped. Extreme
+  disruptions are therefore under-represented, and the means are slightly optimistic.
+- **Selection by trip.** Only vehicles publishing a trip and route id are counted. Out-of-service
+  moves are not.
+- **Hour attribution.** By the leg's start time. A leg starting 08:59 counts in 08.
+- **Off-peak is relative.** A leg that is congested in every observed hour has no clean baseline,
+  so its delay is understated.
+- **Pooled median.** An approximation, as above; it is exact when one route drives the leg.
+- **Schedule drift.** Before 2026-07-31 days are matched to a later timetable. About 35% of May
+  trip ids are missing from it and are placed by route and direction instead.
+
 ## Keeping it current
 
 A GitHub Actions job ([`.github/workflows/rebuild.yml`](.github/workflows/rebuild.yml)) runs at
@@ -322,12 +465,18 @@ https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=m
 ```
 
 `month` takes `YYYY-MM` (an old `all` link falls back to the default); `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
-`stat` takes `med` or `avg`. Anything unrecognised falls back to the
+`stat` takes `med` or `avg`; `lang` takes `en` or `uk`. Anything unrecognised falls back to the
 default rather than erroring. With no query string the map opens on the newest month the data
 covers end to end, weekdays only — weekend traffic mostly flows, so weekdays are where the
 problems show. A link without `days` gets weekdays too. The canonical link stays on the bare homepage on purpose — one page for search
 engines to index, not a thousand near-identical ones. Slider moves and pans use `replaceState`, so
 dragging does not bury the previous page under twenty history entries.
+
+The page speaks English and Ukrainian, switched by the two flags in the panel. Every string lives
+in [`web/i18n.js`](web/i18n.js); the static markup carries `data-i18n` keys and is translated in
+place, so there is still one page and one canonical URL. Without `lang` the map opens in the
+visitor's last pick, else in Ukrainian for a Ukrainian, Russian or Belarusian browser and English
+for the rest.
 
 With no query string at all, the map opens on the current hour **in Kyiv**, not the visitor's own
 timezone, clamped to the nearest hour the collector actually polls.

@@ -78,7 +78,7 @@ function paintLegend() {
   });
   els.ramp.style.background = `linear-gradient(90deg, ${stops.join(", ")})`;
   els.scaleLow.textContent = "+0%";
-  els.scaleUnit.textContent = "longer than off-peak";
+  els.scaleUnit.textContent = t("longer");
   els.scaleHigh.textContent = `≥ +${Math.round(DELAY_HIGH * 100)}%`;
 }
 
@@ -96,7 +96,7 @@ const map = L.map("map", {
   maxBounds: BOUNDS,
   minZoom: 10,
 }).setView(LVIV, 13);
-L.control.zoom({ position: "topright" }).addTo(map);
+const zoomControl = L.control.zoom({ position: "topright" }).addTo(map);
 
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
@@ -406,6 +406,7 @@ function writeUrl() {
     days: els.daytype.value,
     hour: hourKey(),
     stat: els.metric.value,
+    lang: LANG,
     // The viewport too, so a link can point at one junction rather than the
     // whole city.
     z: String(map.getZoom()),
@@ -441,7 +442,7 @@ function labelDaytypes() {
   for (const option of els.daytype.options) {
     const daytype = index.daytypes.find((d) => d.key === option.value);
     const days = month?.daytypes?.[option.value] ?? daytype.days;
-    option.textContent = `${daytype.label} (${days}d)`;
+    option.textContent = `${t("daytype")[option.value] ?? daytype.label} (${t("dayCount", { n: days })})`;
   }
 }
 
@@ -505,9 +506,9 @@ function describe() {
   const parts = [els.month.selectedOptions[0].textContent];
   parts.push(els.daytype.selectedOptions[0].textContent);
   const hour = String(els.hour.value).padStart(2, "0");
-  parts.push(els.allHours.checked ? "all hours" : `${hour}:00–${hour}:59`);
-  parts.push(`${(legsLayer.drawn || []).length.toLocaleString()} legs in view`);
-  parts.push(els.metric.selectedOptions[0].textContent.toLowerCase());
+  parts.push(els.allHours.checked ? t("allHours") : `${hour}:00–${hour}:59`);
+  parts.push(t("legsInView", { n: num((legsLayer.drawn || []).length) }));
+  parts.push(els.metric.selectedOptions[0].textContent.toLocaleLowerCase());
   return parts.join(" · ");
 }
 
@@ -524,7 +525,7 @@ async function render() {
   writeUrl();
   // An open popup describes one leg of the old selection.
   map.closePopup();
-  if (RIDES.key !== monthKey()) els.subtitle.textContent = "loading…";
+  if (RIDES.key !== monthKey()) els.subtitle.textContent = t("loading");
   try {
     await loadMonth();
     if (seq !== requestSeq) return;
@@ -533,7 +534,7 @@ async function render() {
     if (seq !== requestSeq) return;
     RIDES.key = null;
     legsLayer.redraw();
-    els.subtitle.textContent = `no data for this selection (${err.message})`;
+    els.subtitle.textContent = t("noData", { msg: err.message });
   }
 }
 
@@ -541,7 +542,7 @@ function syncHourLabel() {
   const disabled = els.allHours.checked;
   els.hour.disabled = disabled;
   els.hourLabel.textContent = disabled
-    ? "all"
+    ? t("all")
     : `${String(els.hour.value).padStart(2, "0")}:00`;
 }
 
@@ -581,7 +582,7 @@ function sparkline(leg, metric, off) {
   const span = values.length * (width + gap) - gap;
   return (
     `<svg class="spark" viewBox="0 0 ${span} ${height + 12}" width="${span}" ` +
-    `height="${height + 12}" role="img" aria-label="Ride time by hour of day">` +
+    `height="${height + 12}" role="img" aria-label="${t("sparkLabel")}">` +
     `${bars}<text x="0" y="${height + 10}" class="spark-tick">${hours[0]}:00</text>` +
     `<text x="${span}" y="${height + 10}" text-anchor="end" class="spark-tick">` +
     `${hours[hours.length - 1]}:00</text></svg>`
@@ -591,15 +592,17 @@ function sparkline(leg, metric, off) {
 function popupContent(leg) {
   const metric = els.metric.value;
   const data = currentRides();
-  const t = legTime(leg, data, metric);
+  const time = legTime(leg, data, metric);
   const off = legOffPeak(leg, metric);
   const stops = RIDES.paths.stops;
   const name = (id) => (stops[id] ? stops[id][2] : id);
-  const label = els.metric.selectedOptions[0].textContent.toLowerCase();
+  const label = els.metric.selectedOptions[0].textContent.toLocaleLowerCase();
   const offRow = off
-    ? `<span>Off-peak (${off.hour}:00)</span><span>${formatDuration(off.seconds)}</span>` +
-      (t ? `<span>Delay</span><span>${formatPercent(t.seconds / off.seconds - 1)}</span>` : "")
-    : `<span>Off-peak</span><span>too few rides</span>`;
+    ? `<span>${t("offPeakAt", { hour: off.hour })}</span><span>${formatDuration(off.seconds)}</span>` +
+      (time
+        ? `<span>${t("delay")}</span><span>${formatPercent(time.seconds / off.seconds - 1)}</span>`
+        : "")
+    : `<span>${t("offPeak")}</span><span>${t("tooFew")}</span>`;
   // Each route on its own: a shared leg can hide one route that stops longer.
   const routes = leg.members
     .map(({ r, i }) => {
@@ -608,13 +611,13 @@ function popupContent(leg) {
       const v = legs && legs[metric] && legs[metric][i];
       return v == null
         ? ""
-        : `<span>${route.name}</span><span>${formatDuration(v)} · ${legs.n[i]} rides</span>`;
+        : `<span>${route.name}</span><span>${formatDuration(v)} · ${t("rides", { n: legs.n[i] })}</span>`;
     })
     .join("");
   return (
-    `<div class="cell-popup"><b>${t ? formatDuration(t.seconds) : "—"}</b>` +
-    `<div class="stat-label">${name(leg.a)} → ${name(leg.b)}<br>${label}, ` +
-    `${t ? t.n.toLocaleString() : 0} rides, stop to stop incl. dwell</div>` +
+    `<div class="cell-popup"><b>${time ? formatDuration(time.seconds) : "—"}</b>` +
+    `<div class="stat-label">${name(leg.a)} → ${name(leg.b)}<br>` +
+    `${t("legSummary", { label, n: time ? num(time.n) : 0 })}</div>` +
     `<div class="stats">${offRow}${routes}</div>` +
     `<div class="spark-slot">${sparkline(leg, metric, off)}</div></div>`
   );
@@ -646,10 +649,10 @@ const RULER = {
 
 function formatDuration(seconds) {
   const total = Math.round(seconds);
-  if (total < 60) return `${total} s`;
+  if (total < 60) return `${total} ${t("sec")}`;
   const minutes = Math.floor(total / 60);
-  if (minutes < 60) return `${minutes} min ${String(total % 60).padStart(2, "0")} s`;
-  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
+  if (minutes < 60) return `${minutes} ${t("min")} ${String(total % 60).padStart(2, "0")} ${t("sec")}`;
+  return `${Math.floor(minutes / 60)} ${t("hr")} ${String(minutes % 60).padStart(2, "0")} ${t("min")}`;
 }
 
 /* ---------- real rides ---------- */
@@ -940,27 +943,30 @@ function rideRow(option, i) {
   const stops = RIDES.paths.stops;
   const board = stops[option.route.path[option.board]];
   const alight = stops[option.route.path[option.alight]];
-  const km = (option.metres / 1000).toFixed(1);
+  const km = (option.metres / 1000).toLocaleString(locale(), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
   const offpeak = option.offpeak;
   const hour = offpeak && `${String(offpeak.hour).padStart(2, "0")}:00`;
   const delta =
     offpeak && offpeak.hour !== hourKey()
-      ? ` <span class="ride-delta" title="against off-peak, ${hour}">` +
+      ? ` <span class="ride-delta" title="${t("againstOffPeak", { hour })}">` +
         `${formatDelta(option.seconds - offpeak.seconds)}</span>`
       : "";
   const note = !offpeak
     ? ""
     : offpeak.hour === hourKey()
-      ? " · quickest hour of the day"
-      : ` · off-peak ${hour}: ${formatDuration(offpeak.seconds)}`;
+      ? ` · ${t("quickestHour")}`
+      : ` · ${t("offPeakTime", { hour, time: formatDuration(offpeak.seconds) })}`;
   return (
     `<button type="button" class="ride-row" data-ride="${i}">` +
     `<span class="ride-name">${option.route.name}</span>` +
     `<span class="ride-time">${formatDuration(option.seconds)}${delta}</span>` +
     `<span class="ride-detail">${board ? board[2] : "?"} → ${alight ? alight[2] : "?"}<br>` +
-    `${km} km · ${option.observations} rides seen` +
+    `${km} ${t("km")} · ${t("ridesSeen", { n: option.observations })}` +
     // Only when part of the total is filled in rather than measured.
-    `${option.holes ? ` · ${option.holes} of ${option.legs} legs estimated` : ""}` +
+    `${option.holes ? ` · ${t("estimated", { holes: option.holes, legs: option.legs })}` : ""}` +
     `${note}</span>` +
     `</button>`
   );
@@ -968,41 +974,37 @@ function rideRow(option, i) {
 
 function ridesReadout() {
   if (!index.rides) {
-    return `<div class="ride-empty">This build carries no measured ride times.</div>`;
+    return `<div class="ride-empty">${t("noRideTimes")}</div>`;
   }
-  if (RULER.points.length === 0) return `<div class="ride-empty">Click the map to set where you are.</div>`;
+  if (RULER.points.length === 0) return `<div class="ride-empty">${t("clickFirst")}</div>`;
   if (RULER.points.length === 1) {
-    return `<div class="ride-empty">Click again for where you are going. Drag either end to move it.</div>`;
+    return `<div class="ride-empty">${t("clickSecond")}</div>`;
   }
   // Stale figures from the previous hour are worse than none while the new
   // ones are on their way.
   if (!currentRides()) {
-    return `<div class="ride-empty">looking for buses…</div>`;
+    return `<div class="ride-empty">${t("looking")}</div>`;
   }
 
   const options = rideOptions(RULER.points[0], RULER.points[RULER.points.length - 1]);
   if (!options.length) {
-    return (
-      `<div class="ride-empty">No bus runs from the first end to the last one — ` +
-      `no route passes within ${RIDE_NEAR_M} m of both, in that direction. ` +
-      `Try the other way round.</div>`
-    );
+    return `<div class="ride-empty">${t("noRoute", { m: RIDE_NEAR_M })}</div>`;
   }
   // The slower ones are still ways of making the journey, so the tail folds
   // away rather than disappearing — the box opens short, not short of answers.
   const limit = RIDES.expanded ? options.length : RIDE_ROWS;
   const shown = options.slice(0, limit).map(rideRow).join("");
   const rest = options.length - limit;
-  const source = els.metric.selectedOptions[0].textContent.toLowerCase();
+  const source = els.metric.selectedOptions[0].textContent.toLocaleLowerCase();
   const more =
     rest > 0
       ? `<button type="button" class="ride-more" data-expand="1">` +
-        `Show ${rest} slower route${rest === 1 ? "" : "s"}</button>`
+        `${t("showSlower", { n: rest })}</button>`
       : RIDES.expanded && options.length > RIDE_ROWS
-        ? `<button type="button" class="ride-more" data-expand="0">Show fewer</button>`
+        ? `<button type="button" class="ride-more" data-expand="0">${t("showFewer")}</button>`
         : "";
   return (
-    `<div class="ride-head">On the bus <span>${source} of observed rides</span></div>` +
+    `<div class="ride-head">${t("onTheBus")} <span>${t("ofObserved", { source })}</span></div>` +
     shown +
     more
   );
@@ -1106,10 +1108,10 @@ const RulerControl = L.Control.extend({
     const container = L.DomUtil.create("div", "leaflet-bar ruler-toggle");
     const link = L.DomUtil.create("a", "", container);
     link.href = "#";
-    link.title = "Measure ride time between two points";
+    link.title = t("rulerTitle");
     link.setAttribute("role", "button");
     link.setAttribute("aria-pressed", "false");
-    link.setAttribute("aria-label", "Measure ride time");
+    link.setAttribute("aria-label", t("rulerLabel"));
     link.innerHTML =
       '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
       '<path fill="none" stroke="currentColor" stroke-width="1.3" ' +
@@ -1179,6 +1181,38 @@ function rulerBoot() {
   rulerRedraw();
 }
 
+/* ---------- language ---------- */
+
+// Everything app.js writes in words, written again in the current language.
+// The page's own markup is i18n.js's.
+function relabel() {
+  for (const option of els.month.options) {
+    const month = index.months.find((m) => m.key === option.value);
+    // The running month says how far through it the data reaches; a finished
+    // one says how many days it holds.
+    option.textContent = `${monthName(month.key)} (${month.part ?? t("dayCount", { n: month.days })})`;
+  }
+  for (const option of els.metric.options) {
+    option.textContent = t("metric")[option.value] ?? option.value;
+  }
+  labelDaytypes();
+  paintLegend();
+  syncHourLabel();
+  els.note.textContent = t("note", {
+    first: index.days.first,
+    last: index.days.last,
+    n: num(index.samples),
+  });
+  const zoom = zoomControl.getContainer();
+  zoom.querySelector(".leaflet-control-zoom-in").title = t("zoomIn");
+  zoom.querySelector(".leaflet-control-zoom-out").title = t("zoomOut");
+  els.rulerButton.title = t("rulerTitle");
+  els.rulerButton.setAttribute("aria-label", t("rulerLabel"));
+  map.closePopup();
+  if (RULER.on) els.rides.innerHTML = ridesReadout();
+  if (currentRides()) els.subtitle.textContent = describe();
+}
+
 /* ---------- boot ---------- */
 
 async function boot() {
@@ -1189,9 +1223,6 @@ async function boot() {
     option.value = month.key;
     // The running month says how far through it the data reaches; a finished
     // one says how many days it holds.
-    option.textContent = month.part
-      ? `${month.label} (${month.part})`
-      : `${month.label} (${month.days}d)`;
     els.month.append(option);
   }
   els.month.value = lastFullMonth();
@@ -1208,7 +1239,6 @@ async function boot() {
   for (const metric of index.rides.metrics) {
     const option = document.createElement("option");
     option.value = metric.key;
-    option.textContent = metric.label;
     els.metric.append(option);
   }
   // Median by default: how a leg usually goes, not dragged by the odd long
@@ -1221,15 +1251,8 @@ async function boot() {
   els.hour.value = String(currentHour());
 
   readUrl();
-  labelDaytypes();
-  paintLegend();
-  syncHourLabel();
   rulerBoot();
-  els.note.textContent =
-    `Buses only. Each leg is timed stop to stop on the archived vehicles, ` +
-    `standing at stops and waiting at lights included, and coloured against ` +
-    `its own quickest hour of the day. ${index.days.first} … ${index.days.last}, ` +
-    `${index.samples.toLocaleString()} timed legs.`;
+  relabel();
 
   legsLayer.addTo(map);
   await render();
@@ -1254,6 +1277,14 @@ async function boot() {
     repaint();
   });
 
+  for (const button of document.querySelectorAll("[data-lang]")) {
+    button.addEventListener("click", () => {
+      setLang(button.dataset.lang);
+      relabel();
+      writeUrl();
+    });
+  }
+
   // Panning is not a data change: the URL and the leg count are rewritten,
   // and not on every frame of a drag.
   let pending = null;
@@ -1267,5 +1298,5 @@ async function boot() {
 }
 
 boot().catch((err) => {
-  els.subtitle.textContent = `failed to load: ${err.message}`;
+  els.subtitle.textContent = t("failed", { msg: err.message });
 });
