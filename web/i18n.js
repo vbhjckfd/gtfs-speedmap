@@ -40,7 +40,7 @@ const I18N = {
     howP:
       "Only buses are counted. Lviv trolleybuses are published in the schedule feed as <code>route_type=3</code>, the same code as buses, so they are excluded by route name; trams are excluded by route type. A leg is timed from the moment a vehicle comes within the stop radius of one stop on its own trip to the moment it reaches the next, so standing at the stop and waiting at lights are part of the leg. A leg seen on fewer than five rides in a slot is left out rather than guessed.",
     sourceP:
-      "Source data: the Lviv public transport GTFS-RT feed, archived to object storage. Basemap: OpenStreetMap.",
+      "Source data: the Lviv public transport GTFS-RT feed, archived to object storage. Basemap: OpenStreetMap via Protomaps.",
 
     // Built by app.js.
     daytype: { all: "All days", wd: "Weekdays", we: "Weekends" },
@@ -117,7 +117,7 @@ const I18N = {
     howP:
       "Враховано лише автобуси. Тролейбуси Львова в розкладі мають <code>route_type=3</code>, той самий код, що й автобуси, тому їх відкинуто за назвою маршруту; трамваї відкинуто за типом маршруту. Перегін вимірюється від моменту, коли машина на своєму рейсі входить у радіус однієї зупинки, до моменту, коли досягає наступної, тож стояння на зупинці й світлофорах — частина перегону. Перегін, який у певній комірці бачили менше ніж на п'яти поїздках, не показано, а не вгадано.",
     sourceP:
-      "Дані: GTFS-RT-потік громадського транспорту Львова, збережений в об'єктне сховище. Підкладка: OpenStreetMap.",
+      "Дані: GTFS-RT-потік громадського транспорту Львова, збережений в об'єктне сховище. Підкладка: OpenStreetMap через Protomaps.",
 
     daytype: { all: "Усі дні", wd: "Будні", we: "Вихідні" },
     metric: { med: "Медіана", avg: "Середнє" },

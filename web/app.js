@@ -92,17 +92,37 @@ function formatPercent(delay) {
 // by default.
 const map = L.map("map", {
   preferCanvas: true,
+  // Leaflet's tile fade-in sticks part-way on protomaps-leaflet's async tiles.
+  fadeAnimation: false,
   zoomControl: false,
   maxBounds: BOUNDS,
   minZoom: 10,
 }).setView(LVIV, 13);
 const zoomControl = L.control.zoom({ position: "topright" }).addTo(map);
 
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution:
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-}).addTo(map);
+// Same basemap as lad.lviv.ua: the Protomaps basemap drawn by protomaps-leaflet from
+// one .pmtiles archive on our own R2 bucket. The archive covers only the Lviv metro
+// area (TILE_BOUNDS, its extract bbox), so nothing is drawn or fetched past it.
+const OSM_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const TILE_BOUNDS = [[49.68, 23.75], [50.0, 24.35]];
+if (window.protomapsL) {
+  protomapsL
+    .leafletLayer({
+      url: "https://tiles.lad.lviv.ua/lviv-basemap-20260828.pmtiles",
+      flavor: "light",
+      lang: "uk",
+      maxDataZoom: 15,
+      bounds: TILE_BOUNDS,
+      attribution: `${OSM_ATTRIBUTION} · <a href="https://protomaps.com">Protomaps</a>`,
+    })
+    .addTo(map);
+} else {
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: `${OSM_ATTRIBUTION} contributors`,
+  }).addTo(map);
+}
 
 const METRES_PER_DEG_LAT = 111320;
 

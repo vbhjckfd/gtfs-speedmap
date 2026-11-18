@@ -87,7 +87,7 @@
     </script>
 
     <link rel="preload" href="data/index.json" as="fetch" crossorigin="anonymous" />
-    <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin />
+    <link rel="preconnect" href="https://tiles.lad.lviv.ua" crossorigin />
 
     <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
@@ -221,7 +221,7 @@
       </p>
       <p data-i18n-html="sourceP">
         Source data: the Lviv public transport GTFS-RT feed, archived to object storage.
-        Basemap: OpenStreetMap.
+        Basemap: OpenStreetMap via Protomaps.
       </p>
     </section>
 
@@ -230,6 +230,7 @@
     </noscript>
 
     <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="vendor/protomaps-leaflet/protomaps-leaflet.js"></script>
     <script src="i18n.js"></script>
     <script src="app.js"></script>
   </body>
