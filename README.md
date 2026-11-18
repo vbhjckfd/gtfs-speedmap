@@ -1,15 +1,12 @@
 # gtfs-speedmap
 
-An OSM map of **bus ride time** in Lviv: every stop-to-stop leg of the network, drawn along the
-route's own line, one per direction of travel, coloured by how much longer it takes at the chosen
-hour than at **its own quickest hour of the day** — green +0%, red +100% and up. Hour-of-day
-slider, month picker, weekday/weekend split; clicking a leg shows its time per route and hour by
-hour. A ruler times the ride between any two points from the same stop-to-stop measurements.
+An OSM map of **bus ride time** in Lviv. Every stop-to-stop leg of the network is drawn along the
+street the buses drive, one line per direction of travel, and coloured by how much longer it takes
+at the chosen hour than at **its own quickest hour of the day** — green +0%, red +100% and up.
+Hour-of-day slider, month picker, weekday/weekend split. Clicking a leg shows its time per route
+and hour by hour; a ruler times the ride between any two points.
 
-Legs are timed arrival to arrival, so dwell and lights are included. Where routes share a leg
-their times are pooled, weighted by ride count; the off-peak is the quickest hour with at least
-ten rides. The speed pass (`agg`/`hist`, sections below) still runs at ingest but no longer feeds
-the map.
+![Weekday 08:00 in central Lviv](docs/map.jpg)
 
 Built from the GTFS-RT vehicle-position snapshots that
 [`gtfs-collector`](../gtfs-collector) archives to Cloudflare R2.
@@ -19,22 +16,48 @@ R2  raw/YYYY-MM-DD/*.pb           GTFS-RT snapshots, every ~10 s
 R2  static/YYYY-MM-DD/static.zip  GTFS schedule as archived that day
         │  python -m speedmap.ingest --all   (each snapshot fetched once, fed to both passes)
         ▼                                       ▼
-data/agg/YYYY-MM-DD.parquet                 data/seg/YYYY-MM-DD.parquet
-  per-day sums, keyed                         stop-to-stop times, keyed (…, route, stop pair)
-  (month, hour, cell, heading)
-data/hist/YYYY-MM-DD.parquet                data/seghist/YYYY-MM-DD.parquet
-  per-day speed histograms, same key + bin    leg-time histograms, same key + bin
-        │  python -m speedmap.sync push     ⇄  R2 derived/{agg,hist}/
+data/seg/YYYY-MM-DD.parquet                 data/agg/YYYY-MM-DD.parquet
+  stop-to-stop times, keyed                   speed pass, not on the map
+  (month, hour, route, direction, stop pair)  (see "The speed pass" below)
+data/seghist/YYYY-MM-DD.parquet             data/hist/YYYY-MM-DD.parquet
+  the same key plus a 5-second bin
+data/paths/YYYY-MM.json                     route shapes and stop order, from the schedule
+        │  python -m speedmap.sync push     ⇄  R2 derived/
         │  python -m speedmap.build_web
         ▼
 web/data/paths-{month}.json                 route lines and stop order
-web/data/rides-{month}-{days}-{hour}.json   per-leg times — the map and the ruler
+web/data/rides-{month}-{days}-{hour}.json   per-leg times per route — the map and the ruler
+web/data/month-{month}.json, index.json     menus
         │  make deploy
         ▼
 Cloudflare Worker (assets-only)
 ```
 
-## What counts as a sample
+## What the colour means
+
+A leg is the stretch between two adjacent stops, timed from arriving at one to arriving at the
+next, so standing at the stop and waiting at lights are part of it. Most legs are driven by more
+than one route; the map draws the stop pair once and pools the routes' times, weighted by how
+many rides each contributed.
+
+Each leg is then compared only with itself. Its **off-peak** is its quickest hour of the same
+month, day type and statistic, among hours with at least `OFFPEAK_MIN_RIDES` (10) pooled rides,
+and the colour is `time ÷ off-peak − 1`: green at +0%, through amber, red at `DELAY_HIGH` (+100%)
+and beyond. That separates congestion from distance — a long leg on the edge of town is not red
+for being long, and a short one in the centre is red only if rush hour stretches it. A leg with no
+off-peak (too few rides in every hour) is drawn grey.
+
+Lines are nudged to the right of their direction of travel, so the two directions of a street lie
+side by side as the lanes do, and widen with zoom. A click picks the line it landed on.
+
+![A leg's popup: time, off-peak, delay, every route, and the day hour by hour](docs/popup.jpg)
+
+The popup gives the pooled time and how many rides it rests on, the off-peak time and its hour,
+the delay, each route that drives the leg with its own time and ride count, and a bar per hour of
+the day coloured the same way. Pooling, off-peak and colour are all computed in the browser from
+the per-route files, so changing the statistic or hour refetches nothing it already has.
+
+## What counts as a ride
 
 Every GTFS-RT entity is a candidate; it survives only if all of the following hold.
 
@@ -42,187 +65,16 @@ Every GTFS-RT entity is a candidate; it survives only if all of the following ho
 |---|---|
 | Route is a **bus** | `route_type == 3` **and** the short name does not start with `Тр`. `route_type` alone is not enough: Lviv trolleybuses (`Тр22`…`Тр38`) are published as `route_type=3`, and trams are `route_type=0`. |
 | Vehicle timestamp is fresh | The feed republishes vehicles whose own `timestamp` is hours old (p50 = 14 s but p99 ≈ 17 h). Entities more than `STALE_MAX_S` behind the feed header are ghosts. |
-| `(vehicle_id, timestamp)` not seen before | The collector polls every 10 s and the feed repeats unchanged entities, so a parked bus would otherwise be counted many times over. |
-| Speed in `0 … SPEED_MAX_MPS` | 25 m/s = 90 km/h; above that is GPS noise for a city bus. |
+| `(vehicle_id, timestamp)` not seen before | The collector polls every 10 s and the feed repeats unchanged entities. |
 | Inside the Lviv bbox | Drops stray coordinates. |
-| Not inside a discovered **depot** | Parked buses, not slow traffic. See below. |
-| Not within `TERMINAL_RADIUS_M` of the **first or last stop** of its trip | Layover at the end of a run, where buses often stand well past the stop itself. |
-| **Not within `STOP_RADIUS_M` of a stop on its own trip** | Makes the map show *running* speed instead of dwell time. |
 
-That last filter is the point of the whole thing. The stop set is scoped to the vehicle's own trip —
-and when the trip_id is not in the schedule any more, to its route **and direction**. The two
-directions of a Lviv route share **zero** stop_ids, and their nearest opposite-direction stops sit a
-median of 70 m apart, so the stop across the street never blanks out the lane running past it.
+Nothing near a stop is dropped: standing at a stop is part of the ride this pass is here to measure.
 
-Speed is `position.speed` straight from the feed (m/s), which the Lviv feed populates on every
-entity.
-
-## Which way the bus was going
-
-A cell is a 25 m square *and* a heading, because both directions of a street fall inside one square
-and they are not the same road to ride on. Measured over a day of raw positions, the circular
-resultant of the headings in a cell has a median of **0.50** — half of all cells have no single
-direction at all until they are split. What that averaging hid: at 08:00 the two directions of one
-square differ by a median of **6 km/h**, 28% of them by more than 10, and the worst by 8.8 against
-28.5 km/h. That is the approach to a junction against the run out of it, and one number for both
-describes neither.
-
-`position.bearing` is on every entity the feed publishes a speed for, so the key gains `dir`, one of
-`HEADING_BINS` bins centred on their compass point — 8 bins of 45°, which is the coarsest split that
-still keeps the two sides of a street apart after it bends. Everything downstream is keyed the same
-way: the histograms, the percentiles, each cell's free-flow reference and the hourly profile behind
-the popup sparkline. Cell rows grow ×1.5, not ×2 — `MIN_SAMPLES` prunes the thin bins a curve throws
-off.
-
-Eight bins are how the samples are *counted*, not how a street is *drawn*. Where the road bends, one
-direction of travel sweeps through three to five bins and would emit an arrow for each — measured at
-17:00, 2.59 arrows per square and 23% of squares carrying four or more, which at street zoom is a
-thicket rather than a road. So `build_web.py` folds each square's bins into at most two groups: the
-busiest bin leads, everything within 90° of it travels with it, the rest travel against it. That
-gives **1.55 directions per square**, and a curve's samples stop being split five ways. The fold is
-derived from the whole month and never from one selection — do it per payload and the 08:00 view
-would group its bins differently from the all-hours view, and neither would line up with the
-month-wide free-flow reference. A genuine three-way junction cell loses its turning traffic into one of the two
-groups; at 25 m that is rare, and the alternative is the thicket.
-
-The viewer draws each one as an arrow pointing the way its traffic went, nudged half a cell to the
-right of its own heading so the two directions lie side by side as the lanes do, and a click picks
-the arrow it landed on rather than the nearest cell centre. Below 3 px an arrowhead is a smudge, so
-zoomed-out views keep the old dots; above `ARROW_MAX_PX` it stops growing, since at zoom 19 a cell
-is 130 px across and an arrow drawn at its true ground size runs 117 px and swallows its neighbours.
-
-## Finding the depots
-
-GTFS publishes stops, not depots or off-street layover yards, and those are where a bus spends
-hours doing nothing. They are mined out of the aggregates instead, by
-[`depots.py`](src/speedmap/depots.py): cells that are motionless (≤ `DEPOT_MAX_KMH`), busy
-(≥ `DEPOT_MIN_SAMPLES`), more than `DEPOT_MIN_DIST_TO_STOP_M` from any **mid-route** stop, and — the
-part that matters — still motionless across at least `DEPOT_MIN_HOURS` *separate hours of the day*.
-A junction that jams at rush hour fails that last test; a yard full of parked buses passes it at
-05:00 and at 23:00 alike. Neighbouring cells are clustered into one site, and the site radius is its
-observed extent plus `DEPOT_PAD_M`.
-
-Terminal stops deliberately do not shield a cell from being called a depot, and only the **nearest**
-stop is consulted. The layover sprawls past the terminal stop by more than any fixed radius covers:
-the forecourt of the Двірцевий bus station, the far end of Городоцька, and the ends of the Рясне-2,
-Голоско, Сихів and Ряшівська routes all sit at 0–1.5 km/h for fifteen-plus hours a day. Requiring
-distance from *every* stop hid exactly the sites worth finding — one terminus stayed hidden even
-after that was fixed, because an unrelated route's ordinary stop happened to sit 102 m away. Dwell
-at an ordinary stop is already handled by `STOP_RADIUS_M`.
-
-Over 89 days this finds **78 sites holding ~4.39M samples**. Spot-checked against OpenStreetMap, they
-are what they claim to be: the two largest are tagged `amenity=parking` (Збиральна, Авіаційна), and
-the rest are route termini and the bus station.
-
-[`data/depots.json`](data/depots.json) is the one file under `data/` that is committed. It is
-curated rather than derived — each site was checked against OSM — and regenerating it needs a full
-un-masked re-ingest, so a fresh clone that lacked it would build a map full of parked buses.
-`tests/test_depots.py` checks its shape: every radius plausible and inside the bbox, no zone wholly
-inside another, and any hand-set radius carrying a `note` saying why, so the next re-discovery does
-not silently revert it.
-
-A site's radius comes from the extent of the cells that *individually* cleared `DEPOT_MIN_SAMPLES`,
-which under-sizes a yard whose edges are thinly sampled — the core is 5,000 samples in six cells,
-the apron is 40 samples in each of twenty. Widen those by hand against the evidence: take the radius
-out to the last cell at or under `DEPOT_MAX_KMH` and stop before the first moving one. Do not try to
-grow every site at once by flooding outward through contiguous slow cells; that was measured, and it
-pushed zones to 300–480 m over Галицька площа, вул. Хоткевича and Галицьке перехрестя — a primary
-road, a tertiary road and a residential junction. Those cells are slow because buses stand *on the
-street* there, and the street is real.
-
-```bash
-python -m speedmap.depots           # discover, writes data/depots.json
-python -m speedmap.depots --list    # show what is on file
-python -m speedmap.depots --merge   # keep known sites, add newly found ones
-```
-
-Discovery has to run against aggregates built **without** the mask, or the evidence for a site has
-already been filtered away — plain `discover` refuses to overwrite an existing `data/depots.json`
-for that reason. Use `--merge` to widen the mask from already-masked aggregates: it keeps every
-known site and adds only what the new pass turns up. The order is: ingest, discover, then
-`make ingest ARGS="--force --only speed"`.
-
-The mask is applied twice: `aggregate.py` drops the samples at ingest, and `build_web.py` drops
-whole cells that land inside a zone. The second pass is what makes a widened mask visible after a
-`make build` of a few seconds, instead of another couple of hours over R2. Re-ingesting afterwards
-is still worth doing — it also clears those samples out of neighbouring cells' histograms — but it
-is no longer the thing standing between a fix and a deploy.
-
-## Weekdays and weekends
-
-Averaging the whole week together hides the rush hour. City-wide mean speed, km/h:
-
-| hour | weekday | Sat | Sun |
-|---|---|---|---|
-| 07 | 20.6 | 22.7 | 23.3 |
-| 08 | 18.4 | 21.9 | 22.7 |
-| 12 | 18.1 | 19.1 | 20.6 |
-| 17 | **16.6** | 21.1 | **21.4** |
-| 22 | 28.2 | 27.4 | 28.6 |
-
-Without the split, 17:00 is a blend of a 16.6 km/h jam and a 21.4 km/h empty street. Saturday and
-Sunday differ by at most 1.5 km/h at any hour, against a 4–5 km/h weekday gap, so they share one
-"weekend" bucket rather than thinning the data three ways.
-
-The day type comes from the aggregate's filename, and the histograms already hold the full
-distribution, so none of this needed another pass over R2 — `build_web.py` reads the same parquets
-and buckets them differently.
-
-## Which statistic
-
-Each day writes two parquets: `data/agg/` keeps the running sums, `data/hist/` keeps a speed
-histogram per cell in `HIST_BIN_KMH` bins. Every statistic ships in the same JSON, so the Statistic
-dropdown repaints without refetching.
-
-| Statistic | What it answers |
-|---|---|
-| Average | Time-weighted mean — the figure that matches how long a journey takes. |
-| Median | Ignores the tail of waits at lights; a better read on conditions, a worse one on delay. The map's default. |
-| Slow day (p15) / Fast day (p85) | The bad and good ends of the same distribution. |
-| Unreliability (p85 − p15) | How unpredictable a stretch is, which is not the same as how slow. |
-| **% of free-flow** | Median over that cell's *own* p85 across the whole month. |
-
-The last one is the reason the others are not enough. Absolute speed tells you where the road is
-slow; it cannot tell you where there is congestion. Measured across the archive, a cell's median
-speed and its share of its own free-flow correlate at **r = 0.07** — they are very nearly
-independent. A narrow old-town lane doing 20 km/h at 03:00 is not congested; a ring road down to
-22 km/h from 40 is. The reference spans the month on purpose: derive it per selection and the
-colours shift meaninglessly as the slider moves. It stops at the month so each month builds on its
-own, and a month of road works is measured against its own free flow. Cells whose reference is under `REL_MIN_FF_KMH` report
-nothing, because a ratio against a 5 km/h free-flow is noise over noise.
-
-Sample counts per cell: a single month at a single hour has a median of 5 samples and only 31% of
-cells at 15 or more, so the percentiles are firmest on the all-hours views and on busy corridors —
-the popup shows the sample count behind every cell, alongside its speed hour by hour.
-
-## How long the ride takes
-
-The map above answers "how fast is this street". It cannot answer "how long will this take me":
-positions within 40 m of a stop on the vehicle's own trip are dropped, so every dwell is a hole in
-it, and a speed field integrated along a line is not a journey anyway.
-
-So the ruler button beside the zoom controls does not measure the line you draw. Drop a point where
-you are and another where you are going, and it lists every route that runs between them, timed on
-what its vehicles actually did — from a second pass over the same archive that never looks at the
-speed field at all.
+## How a leg is timed
 
 [`segments.py`](src/speedmap/segments.py) reassembles each vehicle's day into runs, finds the
-moment each run came nearest to every stop on its route's path, and keeps the elapsed time between
-adjacent stops. That number includes everything a rider sits through: the dwell at the stop, the
-queue at the light, the wait to pull out.
-
-```
-R2  raw/YYYY-MM-DD/*.pb
-        │  python -m speedmap.ingest --all   (the same read that feeds the speed map)
-        ▼
-data/seg/YYYY-MM-DD.parquet       (month, hour, route, direction, stop pair) -> n, sum_s
-data/seghist/YYYY-MM-DD.parquet   the same key plus a 5-second bin
-data/paths.json                   route paths and stop geometry, from the schedule
-        │  python -m speedmap.build_web
-        ▼
-web/data/rides-{month}-{days}-{hour}.json   per route, one figure per leg of its path
-web/data/paths.json
-```
+moment each run came nearest to every stop on its route's path (within `STOP_PASS_RADIUS_M`), and
+keeps the elapsed time between adjacent stops.
 
 Legs are keyed by the **stop pair**, not by the trip, so every variant of a route feeds the same
 leg, and a leg runs arrival to arrival — which makes the sum across a range telescope into exactly
@@ -247,7 +99,33 @@ Nothing in this pass reads the timetable, which makes the timetable a free check
 | | 0.53 | **0.94** | 1.76 |
 
 Median observed leg 111 s against 120 s scheduled — buses beat the timetable slightly more often
-than they miss it, and the spread either side is the thing the map exists to show.
+than they miss it, and the spread either side, hour by hour, is what the map shows.
+
+## Weekdays and weekends
+
+Averaging the whole week together hides the rush hour, so the map opens on weekdays and offers
+weekends and all days beside them. Saturday and Sunday are close enough to each other, and far
+enough from a weekday, that they share one "weekend" bucket rather than thinning every leg's rides
+three ways. The day type comes from each parquet's filename, so the split costs no extra pass over
+R2.
+
+## Which statistic
+
+`data/seg/` keeps the running sums and `data/seghist/` a leg-time histogram in `SEG_BIN_S` bins,
+so both statistics come out of one build.
+
+| Statistic | What it answers |
+|---|---|
+| Median | How a leg usually goes; robust to the one bus that sat out a diversion. The default. |
+| Average | The figure that adds up along a journey — see the ruler below. |
+
+A leg seen on fewer than `SEG_MIN_OBS` rides in a slot is left out (`null`) rather than guessed.
+
+## Ride time between two points
+
+The ruler button beside the zoom controls answers "how long will this take me". Drop a point where
+you are and another where you are going, and it lists every route that runs between them, timed on
+the same stop-to-stop legs as the map.
 
 ### From two points, not two stops
 
@@ -313,9 +191,8 @@ The run on the 1st closes the month just finished, which from then on shows its 
 the rest. A running month with less than a week of data is left out of the menu.
 
 Each month is built on its own runner, from its own days only, so memory stays at one month's
-worth — about 4.5 GB — however long the archive grows. The heading fold, the depot mask and the
-free-flow reference are all taken from the month itself, so a finished month never has to be
-rebuilt because a later one arrived. Its map files are kept in R2 under `derived/web/YYYY-MM/`, and
+worth however long the archive grows. Every off-peak is taken from the month itself, so a
+finished month never has to be rebuilt because a later one arrived. Its map files are kept in R2 under `derived/web/YYYY-MM/`, and
 the deploy job gathers every month from there and writes `index.json`. A normal run therefore
 builds one month: the one still running. The run on the 8th also rebuilds the month before, so a
 failed run on the 1st still gets that month closed a week later rather than left at 3/4.
@@ -324,7 +201,7 @@ After changing the build, start the job by hand from the Actions tab with months
 month then gets its own runner in parallel — or name the months, `2026-07 2026-08`. By hand locally:
 
 ```bash
-make update   # ingest the new days (speed cells and legs), rebuild every month, deploy
+make update   # ingest the new days, rebuild every month, deploy
 ```
 
 `make ingest` only reads days missing from `data/agg/` or `data/seg/`, so a week costs a few minutes
@@ -390,39 +267,50 @@ a wake from sleep. Three days in a row failing even so stops the run instead of 
 the archive in seconds; `caffeinate -i` keeps the Mac from idling to sleep but not from sleeping on
 a closed lid, so keep it open (or on power with an external display) through a full `--force`.
 
+## The speed pass
+
+The same read of the archive also feeds a second pass, [`aggregate.py`](src/speedmap/aggregate.py),
+which the map no longer shows. It keeps per-day sums and speed histograms per 25 m cell and
+direction of travel in `data/agg/` and `data/hist/`, dropping samples near a stop on the vehicle's
+own trip, at either terminal and inside a depot. It stays because
+[`depots.py`](src/speedmap/depots.py) mines those aggregates for depots and layover yards: cells
+that are motionless, busy, away from any mid-route stop and still motionless across many separate
+hours of the day.
+
+[`data/depots.json`](data/depots.json) is the result, curated against OpenStreetMap and committed;
+`tests/test_depots.py` checks its shape. It masks the speed pass only — leg times never see it.
+
+```bash
+python -m speedmap.depots           # discover, writes data/depots.json
+python -m speedmap.depots --list    # show what is on file
+python -m speedmap.depots --merge   # keep known sites, add newly found ones
+```
+
+Discovery needs aggregates built **without** the mask, so plain `discover` refuses to overwrite an
+existing file; `--merge` widens it from masked ones. Re-run the pass with
+`make ingest ARGS="--force --only speed"`.
+
 ## Tuning
 
-Every knob lives in `src/speedmap/config.py` and reads an env var of the same name.
+Pipeline knobs live in `src/speedmap/config.py` and read an env var of the same name. Changing one
+of these means `make ingest ARGS="--force --only segments"`, except `SEG_MIN_OBS`, which only needs
+`make build`.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `CELL_SIZE_M` | 25 | Arrow spacing. Smaller = finer, more cells, bigger JSON. |
-| `HEADING_BINS` | 8 | Directions of travel a cell is split into. Fewer mixes the two sides of a street; more fragments the samples. |
-| `STOP_RADIUS_M` | 40 | How much road either side of a stop is treated as dwell. |
-| `TERMINAL_RADIUS_M` | 120 | The same, for the first and last stop of a trip. |
+| `STOP_PASS_RADIUS_M` | 60 | How close a vehicle must come to a stop for the pass to count. |
+| `RUN_GAP_MAX_S` | 600 | A silence this long ends a run, so a leg never spans a layover. |
+| `SEG_MAX_S` | 1800 | Longer legs are breakdowns or diversions, not legs. |
+| `SEG_GAP_MAX_S` | 240 | A feed hole this long inside a leg rejects it. |
+| `SEG_BIN_S` | 5 | Leg-time histogram resolution, and so the median's. |
+| `SEG_MIN_OBS` | 5 | Fewer rides in a slot and the leg is left out. |
+| `SHAPE_TOLERANCE_M` | 8 | Simplification of the route shapes the map draws legs along. |
+| `STOP_MATCH_MAX_M` | 120 | How far off its shape a stop may sit and still be matched to it. |
 | `STALE_MAX_S` | 120 | Ghost-entity cutoff. |
-| `SPEED_MAX_MPS` | 25 | Upper sanity bound. |
-| `MIN_SAMPLES` | 5 | Cells with fewer samples are not published. |
-| `HIST_BIN_KMH` | 1 | Histogram resolution, and so every percentile's resolution. |
-| `FREE_FLOW_Q` | 0.85 | Which percentile counts as a cell's free-flow reference. |
-| `REL_MIN_FF_KMH` | 8 | Below this reference speed, "% of free-flow" reports nothing. |
-| `PROFILE_MIN_SAMPLES` | 3 | Per-hour floor for the popup sparkline (see below). |
-| `PROFILE_MIN_HOURS` | 6 | Cells measured in fewer hours get no sparkline at all. |
-| `DEPOT_MAX_KMH` | 4 | How slow a cell must be to be depot-like. |
-| `DEPOT_MIN_SAMPLES` | 300 | How busy. |
-| `DEPOT_MIN_HOURS` | 10 | In how many separate hours — what separates a yard from a jam. |
-| `DEPOT_MIN_DIST_TO_STOP_M` | 120 | How far the nearest mid-route stop must be, so dwell is not mistaken for parking. |
-| `DEPOT_PAD_M` | 40 | Grown onto each site's observed extent. |
-| `SCALE_LOW_KMH` / `SCALE_HIGH_KMH` | 5 / 35 | Colour ramp ends. Measured cell speeds: p25 ≈ 13, p50 ≈ 21, p90 ≈ 41 km/h. |
 
-Changing a filter means re-running `make ingest ARGS="--force --only speed"`; changing `MIN_SAMPLES`, a percentile
-or the colour scale only needs `make build`.
-
-`PROFILE_MIN_SAMPLES` is lower than `MIN_SAMPLES` because the sparkline splits a cell 19 ways: at
-the map's own floor, half of all cells end up with three bars or fewer, which reads as "no buses ran
-at 14:00" rather than "not measured". Dropping the floor to 3 lifts the median cell from 6 populated
-hours to 9, and cells that still cannot fill `PROFILE_MIN_HOURS` get no sparkline — a two-bar chart
-misleads more than it tells.
+The viewer's own constants sit at the top of [`web/app.js`](web/app.js): `DELAY_HIGH` (1.0, the
+delay drawn full red) and `OFFPEAK_MIN_RIDES` (10). The speed pass and depot discovery have their
+own block in `config.py`.
 
 ## Sharing a view
 
@@ -430,11 +318,11 @@ The whole selection lives in the query string, viewport included, so a link can 
 junction rather than the whole city:
 
 ```
-https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=rel&z=16&lat=49.8408&lon=24.0219
+https://gtfs-speedmap.vbhjckfd.workers.dev/?month=2026-07&days=wd&hour=08&stat=med&z=16&lat=49.8408&lon=24.0219
 ```
 
 `month` takes `YYYY-MM` (an old `all` link falls back to the default); `days` takes `all`, `wd` or `we`; `hour` takes `all` or `00`–`23`;
-`stat` takes `v`, `med`, `p15`, `p85`, `spread` or `rel`. Anything unrecognised falls back to the
+`stat` takes `med` or `avg`. Anything unrecognised falls back to the
 default rather than erroring. With no query string the map opens on the newest month the data
 covers end to end, weekdays only — weekend traffic mostly flows, so weekdays are where the
 problems show. A link without `days` gets weekdays too. The canonical link stays on the bare homepage on purpose — one page for search
@@ -446,18 +334,11 @@ timezone, clamped to the nearest hour the collector actually polls.
 
 ## Known artefacts
 
-- A depot that opened after the aggregates were last mined will show up as a red knot until
-  `python -m speedmap.depots` is run again on unmasked data.
-- A site added since the last full re-ingest is masked only at build time, so its samples are still
-  in `data/agg/`. The map is right either way, but any *analysis* over those parquets sees the site
-  as ordinary slow cells and will mislead — before the last re-ingest one such core read as 123k
-  samples at 1.2 km/h, slow in sixteen separate hours, which made a proposed change to the depot
-  heuristics look far more justified than it was. Run `make ingest ARGS="--force --only speed"` first when
-  measuring what the mask has left behind. Right now exactly one site is in that state
-  (Воля-Гомулецька, 3.4k samples).
 - Hours 00:00–04:00 are absent: the collector does not poll then.
 - `static/` archives only start 2026-07-31, so earlier days are matched against the oldest archive.
   About 35% of May trip_ids no longer exist there, which is what the route+direction fallback covers.
+- A leg's off-peak is its quickest *measured* hour. A leg that only runs at rush hour has no quiet
+  hour to compare with, so it reads greener than it rides.
 
 ## Licence
 
