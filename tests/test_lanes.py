@@ -72,6 +72,22 @@ def test_corridor_carries_each_leg_drawn_along_the_route_shape():
     assert second[-1] == pytest.approx([49.8, 24.010], abs=1e-4)
 
 
+def test_leg_is_drawn_from_a_route_with_a_shape_even_when_a_shapeless_one_comes_first():
+    shapeless = route("123", "A1")
+    shaped = route("123", "B2") | {
+        "shape": [[49.8, 24.0], [49.801, 24.0], [49.801, 24.005], [49.8, 24.010]],
+        "dist": [0, 400, 847],
+    }
+    by_hour = {
+        12: hour(A1=[(60, 100)] * 2, B2=[(60, 100)] * 2),
+        8: hour(A1=[(120, 100)] * 2, B2=[(120, 100)] * 2),
+    }
+    (corridor,) = rank_corridors([shapeless, shaped], STOPS, by_hour, weekdays=20)
+
+    assert [49.801, 24.0] in corridor["lines"][0]
+    assert corridor["length_m"] == 847
+
+
 def test_corridor_shorter_than_a_lane_is_worth_is_dropped():
     paths = [route("123")]
     by_hour = {

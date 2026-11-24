@@ -168,7 +168,9 @@ async function loadMonth() {
  *
  * Several routes share most of their legs through the centre; pooled, they are
  * one stretch of street with one ride time, which is what the map is about.
- * The line is cut from the first route's own shape between the two stops.
+ * The line is cut from the first route's own shape between the two stops, the
+ * first route that has one: some come in the feed without, and drawn stop to
+ * stop they cut straight across the blocks. Mirrors _legs in lanes.py.
  */
 function buildLegs(paths) {
   const byPair = new Map();
@@ -177,12 +179,13 @@ function buildLegs(paths) {
       const a = route.path[i];
       const b = route.path[i + 1];
       const pair = `${a}>${b}`;
+      const shaped = Boolean(route.shape && route.dist && route.dist[i + 1] > route.dist[i]);
       let leg = byPair.get(pair);
-      if (!leg) {
-        leg = { a, b, points: legLine(paths, route, i), members: [] };
-        if (leg.points.length < 2) continue;
-        leg.box = L.latLngBounds(leg.points);
-        byPair.set(pair, leg);
+      if (!leg || (shaped && !leg.shaped)) {
+        const points = legLine(paths, route, i);
+        if (points.length < 2) continue;
+        if (!leg) byPair.set(pair, (leg = { a, b, members: [] }));
+        Object.assign(leg, { points, shaped, box: L.latLngBounds(points) });
       }
       leg.members.push({ r, i });
     }

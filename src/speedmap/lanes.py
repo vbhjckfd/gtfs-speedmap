@@ -69,21 +69,21 @@ def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
         dist = route.get("dist")
         for i, (a, b) in enumerate(zip(route["path"], route["path"][1:])):
             leg = legs.get(f"{a}>{b}")
-            if leg is None:
-                if dist and dist[i + 1] > dist[i]:
+            measured = bool(dist) and dist[i + 1] > dist[i]
+            shaped = measured and bool(route.get("shape"))
+            # Some routes in the feed have no shape: the first route seen with
+            # one draws the leg, not a straight line across the blocks.
+            if leg is None or (shaped and not leg["shaped"]):
+                if measured:
                     length = dist[i + 1] - dist[i]
                 elif a in stops and b in stops:
                     length = _metres(stops[a], stops[b])
                 else:
                     continue
-                leg = legs[f"{a}>{b}"] = {
-                    "a": a,
-                    "b": b,
-                    "length": length,
-                    "line": _line(route, i, stops),
-                    "members": [],
-                    "names": set(),
-                }
+                geometry = {"length": length, "line": _line(route, i, stops), "shaped": shaped}
+                if leg is None:
+                    leg = legs[f"{a}>{b}"] = {"a": a, "b": b, "members": [], "names": set()}
+                leg.update(geometry)
             leg["members"].append((key, i))
             leg["names"].add(route["name"])
     return legs
