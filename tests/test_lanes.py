@@ -129,6 +129,17 @@ def test_street_follows_the_busier_branch_where_routes_split():
     assert legs == [["1>2", "2>3"], ["2>6"]]
 
 
+def test_a_few_rides_caught_in_a_terminal_layover_do_not_make_a_leg_hot():
+    # Typical rides take 50 s at every hour; at rush a few runs swallowed a
+    # 20-minute layover, which drags the mean but not the median.
+    paths = [route("12")]
+    by_hour = {
+        12: {"A1|0": {"avg": [50], "med": [50], "n": [100]}},
+        8: {"A1|0": {"avg": [110], "med": [50], "n": [100]}},
+    }
+    assert rank_corridors(paths, STOPS, by_hour, weekdays=20) == []
+
+
 def test_leg_without_a_trusted_midday_baseline_is_ignored():
     paths = [route("123")]
     by_hour = {

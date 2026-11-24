@@ -95,6 +95,40 @@ def test_a_leg_spanning_a_feed_hole_is_dropped(feed):
     assert [(f, t) for _, f, t, _ in legs] == [("START", "N")]
 
 
+def parked(at_ll, t_start, t_end):
+    """A bus standing still at a point, sampled every STEP_S."""
+    x, y = project(at_ll[1], at_ll[0])
+    return [(t, x, y) for t in range(t_start, t_end + 1, STEP_S)]
+
+
+def toward(a_ll, b_ll, metres_short):
+    """The point `metres_short` before b on the way from a."""
+    ax, ay = project(a_ll[1], a_ll[0])
+    bx, by = project(b_ll[1], b_ll[0])
+    f = 1 - metres_short / ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+    return (a_ll[0] + (b_ll[0] - a_ll[0]) * f, a_ll[1] + (b_ll[1] - a_ll[1]) * f)
+
+
+def test_layovers_at_either_terminal_stay_out_of_the_legs(feed):
+    """Buses lay over at the ends of a route, parked by the stop for many minutes.
+
+    Nearest approach would land anywhere in that wait. The run starts timing
+    when the bus leaves the first stop and stops when it reaches the last one.
+    """
+    short_of_far = toward(STOP_NORTH, STOP_FAR, 30)
+    run = (
+        parked(STOP_START, T0 - 600, T0 - STEP_S)  # waiting to depart
+        + leg(STOP_START, STOP_NORTH, T0, T0 + 120)
+        + leg(STOP_NORTH, short_of_far, T0 + 120 + STEP_S, T0 + 300)
+        + parked(STOP_FAR, T0 + 600, T0 + 1200)  # pulled onto the stand later
+    )
+    stats = SegStats()
+    legs = legs_of_run(run, path_of(feed), feed, stats)
+    # From departure at T0, not from somewhere in the wait; to arrival in range
+    # of FAR at T0 + 300, not to the stand.
+    assert [seconds for *_, seconds in legs] == [120, 180]
+
+
 def test_a_backwards_leg_is_dropped(feed):
     """Nearest approach can land out of order; that is not a leg."""
     stats = SegStats()
@@ -106,7 +140,8 @@ def test_a_backwards_leg_is_dropped(feed):
 
 def test_an_implausibly_long_leg_is_dropped(feed):
     stats = SegStats()
-    slow = leg(STOP_START, STOP_NORTH, T0, T0 + SEG_MAX_S + 60, step_s=30)
+    # Timed from leaving START's radius, a minute into the crawl.
+    slow = leg(STOP_START, STOP_NORTH, T0, T0 + SEG_MAX_S + 180, step_s=30)
     legs = legs_of_run(slow, path_of(feed), feed, stats)
     assert legs == []
     assert stats["leg_too_long"] == 1

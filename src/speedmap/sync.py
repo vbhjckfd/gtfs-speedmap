@@ -9,13 +9,15 @@ aggregates go back to the same bucket instead:
     derived/hist/YYYY-MM-DD.parquet      per-day speed histograms
     derived/seg/YYYY-MM-DD.parquet       per-day stop-to-stop leg times
     derived/seghist/YYYY-MM-DD.parquet   per-day leg-time histograms
+    derived/trace/YYYY-MM-DD.parquet     per-day GPS trace bins along each leg
     derived/paths/YYYY-MM.json           each month's route geometry
     derived/depots.json                  the depot zones the days were built with
     derived/web/YYYY-MM/*.json           each month's built map files
 
 The parquets are immutable once written: a day's snapshots never change, so a
 key that exists remotely holds exactly what the same-named local file would.
-That makes both directions a name comparison and nothing more.
+That makes both directions a name comparison and nothing more — until a pass is
+rerun with changed logic, when `push --replace KIND` sends that kind up whole.
 
 The JSON files are not: the running month's paths move with its timetable, and
 depots.json can be edited by hand. They are small, so they are pushed whole
@@ -50,6 +52,7 @@ from .config import (
     PATHS_DIR,
     SEG_DIR,
     SEG_HIST_DIR,
+    TRACE_DIR,
     WEB_DATA_DIR,
     WORKERS,
 )
@@ -57,7 +60,13 @@ from .config import (
 DERIVED_PREFIX = "derived/"
 WEB_PREFIX = f"{DERIVED_PREFIX}web/"
 # Local directory ↔ remote prefix. Keep the names in step with config.py.
-KINDS = {"agg": AGG_DIR, "hist": HIST_DIR, "seg": SEG_DIR, "seghist": SEG_HIST_DIR}
+KINDS = {
+    "agg": AGG_DIR,
+    "hist": HIST_DIR,
+    "seg": SEG_DIR,
+    "seghist": SEG_HIST_DIR,
+    "trace": TRACE_DIR,
+}
 
 
 def remote_names(client, prefix: str, suffix: str) -> set[str]:
@@ -142,14 +151,19 @@ def pull(client, workers: int = WORKERS, month: str | None = None) -> int:
     return fetched
 
 
-def push(client, workers: int = WORKERS) -> int:
-    """Upload the day files R2 lacks, and every small JSON file whole."""
+def push(client, workers: int = WORKERS, replace: tuple[str, ...] = ()) -> int:
+    """Upload the day files R2 lacks, and every small JSON file whole.
+
+    `replace` names kinds whose local day files all go up, overwriting R2: for
+    after a pass was rerun with --force, which the name comparison cannot see.
+    """
     sent = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for kind, directory in KINDS.items():
             if not directory.exists():
                 continue
-            missing = sorted(local_names(directory) - remote_keys(client, kind))
+            local = local_names(directory)
+            missing = sorted(local if kind in replace else local - remote_keys(client, kind))
             list(
                 pool.map(
                     lambda name, kind=kind, directory=directory: _upload(
@@ -207,13 +221,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("action", choices=("pull", "push", "push-web", "pull-web"))
     ap.add_argument("--month", help="YYYY-MM: pull only what that month needs; push-web needs it")
     ap.add_argument("--workers", type=int, default=WORKERS)
+    ap.add_argument(
+        "--replace",
+        action="append",
+        choices=list(KINDS),
+        default=[],
+        help="push: overwrite R2's day files of this kind (after an ingest --force)",
+    )
     args = ap.parse_args(argv)
 
     client = r2.make_client()
     if args.action == "pull":
         pull(client, workers=args.workers, month=args.month)
     elif args.action == "push":
-        push(client, workers=args.workers)
+        push(client, workers=args.workers, replace=tuple(args.replace))
     elif args.action == "push-web":
         if not args.month:
             ap.error("push-web needs --month")

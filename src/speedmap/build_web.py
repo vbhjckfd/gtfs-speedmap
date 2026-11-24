@@ -35,12 +35,14 @@ import numpy as np
 import pandas as pd
 
 from .lanes import rank_corridors
+from .traces import TRACE_KEYS, dense_shapes
 from .config import (
     SEG_BIN_S,
     SEG_DIR,
     SEG_HIST_DIR,
     SEG_MIN_OBS,
     STOP_PASS_RADIUS_M,
+    TRACE_DIR,
     TZ,
     WEB_DATA_DIR,
     paths_file,
@@ -202,6 +204,16 @@ def load_ride_slices(month: str) -> tuple[dict, dict, list[dict], dict]:
     return leg_slices, bin_slices, paths, stops
 
 
+def load_traces(month: str) -> pd.DataFrame:
+    """The month's GPS trace bins, summed over its days (see traces.py)."""
+    keys = [*TRACE_KEYS, "bin"]
+    total = pd.DataFrame()
+    for path in _month_paths(TRACE_DIR, month) if TRACE_DIR.exists() else []:
+        total = pd.concat([total, pd.read_parquet(path)], ignore_index=True)
+        total = total.groupby(keys, as_index=False, sort=False)[["n", "sum_s", "sum_off"]].sum()
+    return total
+
+
 def _combine_rides(slices: dict, month: str, daytype: str, keys: list[str]) -> pd.DataFrame:
     parts = [
         frame
@@ -299,6 +311,7 @@ def build_month(month: str) -> dict:
     leg_slices, seg_bin_slices, paths, stops = load_ride_slices(month)
     if not leg_slices:
         raise SystemExit(f"no leg times for {month} in {SEG_DIR} — run `make ingest` first")
+    paths = dense_shapes(paths, stops, load_traces(month))
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
     written: set[str] = set()
 

@@ -13,6 +13,7 @@ of a route contributes to the same leg:
 
     data/seg/YYYY-MM-DD.parquet      (month, hour, route, direction, pair) -> n, sum_s
     data/seghist/YYYY-MM-DD.parquet  the same key plus a SEG_BIN_S-second bin
+    data/trace/YYYY-MM-DD.parquet    where along each leg the buses drove (traces.py)
 
 A leg is timed against the canonical path of its route and direction — the
 longest stop list that route runs. A short-turn variant simply never approaches
@@ -46,12 +47,15 @@ from .config import (
     SEG_MAX_S,
     STALE_MAX_S,
     STOP_PASS_RADIUS_M,
+    TRACE_DIR,
+    TRACE_MAX_OFF_M,
     TZ,
 )
 from .files import write_atomic
 from .grid import in_bbox, project, stops_near
 from .snapshots import VehicleRow
 from .static_feed import StaticFeed, load_for_date
+from .traces import TRACE_COLUMNS, leg_line, trace_leg, utm_line
 
 _LOCAL_TZ = ZoneInfo(TZ)
 
@@ -142,13 +146,24 @@ def nearest_passes(
     Nearest approach rather than first entry into the radius, so the timestamp
     is the moment at the stop rather than the moment the bus came into range of
     it, which on a 60 m radius is up to a few seconds of slack either side.
+
+    The two ends of the path are the exception: buses lay over there, parked by
+    the stop for many minutes, and the nearest sample could fall anywhere in the
+    wait. The first stop is passed when the bus last stood in range of it (it
+    left), the last stop when the bus first came in range (it arrived).
     """
+    last = len(path_index) - 1
     best: dict[int, tuple[float, int]] = {}
-    for ts, x, y in run:
+    for ts, x, y in run:  # in time order
         for stop_id, d2 in stops_near(x, y, path_index, feed, STOP_PASS_RADIUS_M):
             k = path_index[stop_id]
             current = best.get(k)
-            if current is None or d2 < current[0]:
+            if k == 0:
+                best[k] = (0.0, ts)
+            elif k == last:
+                if current is None:
+                    best[k] = (0.0, ts)
+            elif current is None or d2 < current[0]:
                 best[k] = (d2, ts)
     return {k: ts for k, (_, ts) in best.items()}
 
@@ -211,8 +226,25 @@ def accumulate(
     acc: dict[tuple[str, int, str, str, str, str], list],
     hist: dict[tuple[str, int, str, str, str, str, int], int],
     stats: SegStats,
+    trace: dict[tuple, list] | None = None,
 ) -> None:
+    """Time every run's legs into `acc` and `hist`, and, given `trace`, bin
+    where along each leg the run's samples fell."""
     paths: dict[tuple[str, str], tuple[str, ...]] = {}
+    lines: dict[tuple[str, str, str], tuple] = {}
+
+    def line_of(route_dir: tuple[str, str], from_stop: str) -> tuple:
+        line = lines.get((*route_dir, from_stop))
+        if line is None:
+            # The last visit, as legs_of_run indexes a stop the path repeats.
+            k = max(i for i, stop in enumerate(paths[route_dir]) if stop == from_stop)
+            route = {
+                "path": paths[route_dir],
+                "shape": feed.route_dir_shape.get(route_dir),
+                "dist": feed.route_dir_stop_dist.get(route_dir),
+            }
+            line = lines[(*route_dir, from_stop)] = utm_line(leg_line(route, k, feed.stop_ll))
+        return line
 
     for (_, trip_id, route_id), samples in runs.items():
         route_dir = feed.route_dir_for(trip_id, route_id)
@@ -232,7 +264,19 @@ def accumulate(
             if len(run) < 2:
                 stats["runs_short"] += 1
                 continue
+            times = [ts for ts, _, _ in run]
             for start, from_stop, to_stop, seconds in legs_of_run(run, path, feed, stats):
+                if trace is not None:
+                    trace_leg(
+                        run,
+                        times,
+                        start,
+                        start + seconds,
+                        line_of(route_dir, from_stop),
+                        TRACE_MAX_OFF_M,
+                        (*route_dir, from_stop, to_stop),
+                        trace,
+                    )
                 local = datetime.fromtimestamp(start, tz=timezone.utc).astimezone(_LOCAL_TZ)
                 key = (
                     local.strftime("%Y-%m"),
@@ -268,10 +312,11 @@ class SegmentDay:
     def add(self, rows: list[VehicleRow]) -> None:
         add_rows(rows, self.feed, self.runs, self.seen, self.stats)
 
-    def frames(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def frames(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         acc: dict[tuple[str, int, str, str, str, str], list] = {}
         hist: dict[tuple[str, int, str, str, str, str, int], int] = {}
-        accumulate(self.runs, self.feed, acc, hist, self.stats)
+        trace: dict[tuple, list] = {}
+        accumulate(self.runs, self.feed, acc, hist, self.stats, trace)
         legs = pd.DataFrame(
             [(*key, n, total) for key, (n, total) in acc.items()],
             columns=[*KEY_COLUMNS, "n", "sum_s"],
@@ -280,11 +325,13 @@ class SegmentDay:
             [(*key, n) for key, n in hist.items()],
             columns=[*KEY_COLUMNS, "bin", "n"],
         )
-        return legs, bins
+        traces = pd.DataFrame([(*key, *v) for key, v in trace.items()], columns=TRACE_COLUMNS)
+        return legs, bins, traces
 
 
-def _outputs(date_str: str) -> tuple[Path, Path]:
-    return SEG_DIR / f"{date_str}.parquet", SEG_HIST_DIR / f"{date_str}.parquet"
+def _outputs(date_str: str) -> tuple[Path, Path, Path]:
+    name = f"{date_str}.parquet"
+    return SEG_DIR / name, SEG_HIST_DIR / name, TRACE_DIR / name
 
 
 def is_done(date_str: str) -> bool:
@@ -292,18 +339,16 @@ def is_done(date_str: str) -> bool:
 
 
 def save(date_str: str, day: SegmentDay | None, started: float) -> bool:
-    legs, bins = day.frames() if day else (pd.DataFrame(), pd.DataFrame())
-    if legs.empty:
+    frames = day.frames() if day else (pd.DataFrame(),)
+    if frames[0].empty:
         print(f"{date_str}  no data", flush=True)
         return False
 
-    SEG_DIR.mkdir(parents=True, exist_ok=True)
-    SEG_HIST_DIR.mkdir(parents=True, exist_ok=True)
-    out, hist_out = _outputs(date_str)
-    write_atomic(out, lambda p: legs.to_parquet(p, index=False))
-    write_atomic(hist_out, lambda p: bins.to_parquet(p, index=False))
+    for frame, out in zip(frames, _outputs(date_str)):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(out, lambda p, frame=frame: frame.to_parquet(p, index=False))
     print(
-        f"{date_str}  {day.stats['snapshots']} snapshots  {len(legs)} pairs  "
+        f"{date_str}  {day.stats['snapshots']} snapshots  {len(frames[0])} pairs  "
         f"{time.monotonic() - started:.0f}s  {day.stats.render()}",
         flush=True,
     )

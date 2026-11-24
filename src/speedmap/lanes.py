@@ -6,8 +6,8 @@ give buses empty night roads, only take back what rush traffic adds. Adjacent ho
 legs are merged into one corridor along the busiest stream, since a lane on one
 200 m block helps nobody; where routes join or split, the corridor follows the
 leg with the most buses and the lighter branch starts its own. Corridors are
-ranked by bus-minutes lost per weekday rush per km of lane: rides x seconds over
-midday, so a slow street nobody drives loses to a slightly slower one that
+ranked by bus-minutes lost per weekday rush per km of lane: rides x median
+seconds over midday, so a slow street nobody drives loses to a slightly slower one that
 carries forty buses an hour, and a short bottleneck beats a long mild street.
 
 Built once per month from the weekday ride payloads, and written beside them as
@@ -16,7 +16,7 @@ web/data/lanes-YYYY-MM.json.
 
 from __future__ import annotations
 
-import math
+from .traces import leg_line, metres
 
 # Local hours, weekday rush: 07:00-09:00 and 16:00-18:00.
 RUSH_HOURS = (7, 8, 16, 17)
@@ -26,39 +26,6 @@ TOP_N = 10
 # Local hours whose pooled ride time is the baseline, and the rides it needs.
 MIDDAY_HOURS = (10, 11, 12, 13, 14)
 BASELINE_MIN_RIDES = 10
-
-
-def _metres(a: list, b: list) -> float:
-    dy = (a[0] - b[0]) * 111320
-    dx = (a[1] - b[1]) * 111320 * math.cos(math.radians(a[0]))
-    return math.hypot(dx, dy)
-
-
-def _along(points: list, cum: list[float], at: float) -> list[float]:
-    """The point `at` metres into a polyline whose vertices sit `cum` metres in."""
-    for (p, q), (c0, c1) in zip(zip(points, points[1:]), zip(cum, cum[1:])):
-        if c1 >= at:
-            t = (at - c0) / (c1 - c0) if c1 > c0 else 0
-            return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
-    return list(points[-1][:2])
-
-
-def _line(route: dict, i: int, stops: dict) -> list[list[float]]:
-    """Leg i of a route as the viewer draws it: its shape between the two stops.
-
-    Mirrors legLine in web/app.js; a route without a shape is drawn stop to stop.
-    """
-    a, b = route["path"][i], route["path"][i + 1]
-    straight = [list(stops[s][:2]) for s in (a, b) if s in stops]
-    shape, dist = route.get("shape"), route.get("dist")
-    if not shape or not dist or not dist[i + 1] > dist[i]:
-        return straight
-    cum = [0.0]
-    for p, q in zip(shape, shape[1:]):
-        cum.append(cum[-1] + _metres(p, q))
-    start, end = dist[i], dist[i + 1]
-    inside = [list(p[:2]) for p, c in zip(shape, cum) if start < c < end]
-    return [_along(shape, cum, start), *inside, _along(shape, cum, end)]
 
 
 def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
@@ -77,10 +44,10 @@ def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
                 if measured:
                     length = dist[i + 1] - dist[i]
                 elif a in stops and b in stops:
-                    length = _metres(stops[a], stops[b])
+                    length = metres(stops[a], stops[b])
                 else:
                     continue
-                geometry = {"length": length, "line": _line(route, i, stops), "shaped": shaped}
+                geometry = {"length": length, "line": leg_line(route, i, stops), "shaped": shaped}
                 if leg is None:
                     leg = legs[f"{a}>{b}"] = {"a": a, "b": b, "members": [], "names": set()}
                 leg.update(geometry)
@@ -90,13 +57,18 @@ def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
 
 
 def _pooled(leg: dict, payload: dict) -> tuple[float, int] | None:
-    """The leg's mean ride time and ride count across the routes that drive it."""
+    """The leg's typical ride time and ride count across the routes that drive it.
+
+    Medians, not means: a few runs that swallowed a terminal layover or a
+    breakdown add many minutes each and would make a quiet leg look jammed.
+    Routes are pooled by a ride-weighted mean of their medians.
+    """
     total = n = 0
     for key, i in leg["members"]:
         route = payload.get(key)
-        if not route or route["avg"][i] is None:
+        if not route or route["med"][i] is None:
             continue
-        total += route["avg"][i] * route["n"][i]
+        total += route["med"][i] * route["n"][i]
         n += route["n"][i]
     return (total / n, n) if n else None
 

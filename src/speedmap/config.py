@@ -161,6 +161,12 @@ SHAPE_TOLERANCE_M = _float("SHAPE_TOLERANCE_M", 8.0)
 # points and shape points come from different sources and disagree by a lane or
 # a lay-by; beyond this the stop is not on this pass of the route.
 STOP_MATCH_MAX_M = _float("STOP_MATCH_MAX_M", 120.0)
+# Route shapes redrawn from GPS traces (traces.py): bin length along each leg,
+# how far off the leg's reference line a sample may sit and still be this
+# street, and how many samples a bin needs before its mean is trusted.
+TRACE_BIN_M = _float("TRACE_BIN_M", 20.0)
+TRACE_MAX_OFF_M = _float("TRACE_MAX_OFF_M", 200.0)
+TRACE_MIN_N = _int("TRACE_MIN_N", 5)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
@@ -173,6 +179,7 @@ AGG_DIR = DATA_DIR / "agg"
 HIST_DIR = DATA_DIR / "hist"
 SEG_DIR = DATA_DIR / "seg"
 SEG_HIST_DIR = DATA_DIR / "seghist"
+TRACE_DIR = DATA_DIR / "trace"
 STATIC_CACHE_DIR = DATA_DIR / "static_cache"
 DEPOT_FILE = DATA_DIR / "depots.json"
 # Route paths and stop geometry, snapshotted by segments.py so build_web can lay
