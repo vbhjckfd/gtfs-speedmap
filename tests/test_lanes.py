@@ -53,6 +53,25 @@ def test_adjacent_delayed_legs_merge_into_one_corridor_timed_against_midday():
     assert corridor["delay"] == pytest.approx(1.0)
 
 
+def test_corridor_carries_each_leg_drawn_along_the_route_shape():
+    shaped = route("123") | {
+        # A dogleg, 847 m long: stop 2 sits past its first corner, stop 3 at its end.
+        "shape": [[49.8, 24.0], [49.801, 24.0], [49.801, 24.005], [49.8, 24.010]],
+        "dist": [0, 400, 847],
+    }
+    by_hour = {
+        12: hour(A1=[(60, 100)] * 2),
+        8: hour(A1=[(120, 100)] * 2),
+    }
+    (corridor,) = rank_corridors([shaped], STOPS, by_hour, weekdays=20)
+
+    first, second = corridor["lines"]
+    assert first[0] == pytest.approx([49.8, 24.0])
+    assert [49.801, 24.0] in first  # the shape's corner, not a straight stop-to-stop line
+    assert first[-1] == pytest.approx(second[0])
+    assert second[-1] == pytest.approx([49.8, 24.010], abs=1e-4)
+
+
 def test_corridor_shorter_than_a_lane_is_worth_is_dropped():
     paths = [route("123")]
     by_hour = {

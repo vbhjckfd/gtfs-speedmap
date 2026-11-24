@@ -7,10 +7,6 @@
  */
 
 const DATA = "data";
-const LVIV = [49.8397, 24.0297];
-// The network with a margin round it. A shared link outside it is a typo, not
-// a view, and panning past it only finds blank map.
-const BOUNDS = L.latLngBounds([49.55, 23.6], [50.1, 24.45]);
 // A leg this much slower than its off-peak is drawn fully red.
 const DELAY_HIGH = 1.0;
 // Click slop around a drawn leg, in pixels.
@@ -36,7 +32,7 @@ const els = {
   ruler: document.getElementById("ruler"),
   rides: document.getElementById("rides"),
   rulerClear: document.getElementById("ruler-clear"),
-  lanesList: document.getElementById("lanes-list"),
+  lanesLink: document.getElementById("lanes-link"),
   rulerButton: null, // the map control, created below
   panel: document.getElementById("panel"),
   panelToggle: document.getElementById("panel-toggle"),
@@ -91,49 +87,7 @@ function formatPercent(delay) {
 
 /* ---------- map ---------- */
 
-// The panel occupies the top-left corner, where Leaflet puts the zoom buttons
-// by default.
-const map = L.map("map", {
-  preferCanvas: true,
-  // Leaflet's tile fade-in sticks part-way on protomaps-leaflet's async tiles.
-  fadeAnimation: false,
-  zoomControl: false,
-  maxBounds: BOUNDS,
-  minZoom: 10,
-}).setView(LVIV, 13);
-const zoomControl = L.control.zoom({ position: "topright" }).addTo(map);
-
-// Same basemap as lad.lviv.ua: the Protomaps basemap drawn by protomaps-leaflet from
-// one .pmtiles archive on our own R2 bucket. The archive covers only the Lviv metro
-// area (TILE_BOUNDS, its extract bbox), so nothing is drawn or fetched past it.
-const OSM_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
-const TILE_BOUNDS = [[49.68, 23.75], [50.0, 24.35]];
-if (window.protomapsL) {
-  protomapsL
-    .leafletLayer({
-      url: "https://tiles.lad.lviv.ua/lviv-basemap-20260828.pmtiles",
-      flavor: "light",
-      lang: "uk",
-      maxDataZoom: 15,
-      bounds: TILE_BOUNDS,
-      attribution: `${OSM_ATTRIBUTION} · <a href="https://protomaps.com">Protomaps</a>`,
-    })
-    .addTo(map);
-} else {
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: `${OSM_ATTRIBUTION} contributors`,
-  }).addTo(map);
-}
-
-const METRES_PER_DEG_LAT = 111320;
-
-function metresBetween(lat1, lon1, lat2, lon2) {
-  const dy = (lat1 - lat2) * METRES_PER_DEG_LAT;
-  const dx = (lon1 - lon2) * METRES_PER_DEG_LAT * Math.cos((lat1 * Math.PI) / 180);
-  return Math.sqrt(dx * dx + dy * dy);
-}
+const { map, zoomControl } = makeMap();
 
 /* ---------- loaded month ---------- */
 
@@ -419,73 +373,10 @@ const legsLayer = new LegLayer();
 
 /* ---------- bus lane candidates ---------- */
 
-// Ranked at build time (lanes.py) from weekday rush hours, whatever is on screen.
-const LANES = { list: [], layer: null };
-
-async function loadLanes() {
-  const month = els.month.value;
-  // A month built before lanes.py has no file: hide the panel, not "none qualify".
-  const list = await fetchSelection(`lanes-${month}`).catch(() => null);
-  if (month !== els.month.value) return;
-  els.lanesList.closest("details").hidden = !list;
-  LANES.list = list || [];
-  lanesRender();
+// Its own page; the link carries the month and language over.
+function lanesLink() {
+  els.lanesLink.href = `suggestions?month=${els.month.value}&lang=${LANG}`;
 }
-
-function laneClear() {
-  if (LANES.layer) map.removeLayer(LANES.layer);
-  LANES.layer = null;
-}
-
-function lanesRender() {
-  laneClear();
-  const list = LANES.list;
-  els.lanesList.innerHTML = list.length
-    ? list.map(laneRow).join("")
-    : `<div class="ride-empty">${t("lanesNone")}</div>`;
-}
-
-function laneRow(c, i) {
-  const km = (c.length_m / 1000).toLocaleString(locale(), {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
-  const routes = c.routes.slice(0, 6).join(", ") + (c.routes.length > 6 ? "…" : "");
-  return (
-    `<button type="button" class="ride-row" data-lane="${i}">` +
-    `<span class="ride-name">${i + 1}</span>` +
-    `<span class="ride-time">${t("lanesPerKm", { min: Math.round(c.lost_per_km) })}</span>` +
-    `<span class="ride-detail">${c.from} → ${c.to}<br>` +
-    `${km} ${t("km")} · ${t("lanesLost", { min: Math.round(c.lost_min) })} · ` +
-    `${t("lanesBuses", { n: Math.round(c.buses) })} · ` +
-    `+${Math.round(c.delay * 100)}% · ${routes}</span>` +
-    `</button>`
-  );
-}
-
-function laneShow(c) {
-  laneClear();
-  const byKey = new Map(RIDES.legs.map((leg) => [`${leg.a}>${leg.b}`, leg.points]));
-  const lines = c.legs.map((k) => byKey.get(k)).filter(Boolean);
-  if (!lines.length) return;
-  // A lane serves one direction, so each leg carries an arrowhead.
-  const arrows = lines.map((pts) => {
-    const i = Math.floor((pts.length - 2) / 2);
-    return arrowMarker(pts[i], pts[i + 1]);
-  });
-  LANES.layer = L.featureGroup([
-    L.polyline(lines, { color: "#3b6ea5", weight: 9, opacity: 0.55, interactive: false }),
-    ...arrows,
-  ]).addTo(map);
-  map.fitBounds(LANES.layer.getBounds(), { maxZoom: 16, padding: [60, 60] });
-}
-
-els.lanesList.addEventListener("click", (e) => {
-  const row = e.target.closest("[data-lane]");
-  if (!row) return;
-  els.lanesList.querySelectorAll(".ride-row").forEach((r) => r.classList.toggle("active", r === row));
-  laneShow(LANES.list[row.dataset.lane]);
-});
 
 /* ---------- shareable URL ---------- */
 
@@ -509,6 +400,7 @@ function writeUrl() {
   // replaceState, not pushState: dragging the slider must not bury the user's
   // previous page under twenty history entries.
   history.replaceState(null, "", `?${params}`);
+  lanesLink();
 }
 
 // The hour bins are local to the feed's city, so "now" means now *there* —
@@ -623,7 +515,6 @@ async function render() {
     await loadMonth();
     if (seq !== requestSeq) return;
     repaint();
-    loadLanes();
   } catch (err) {
     if (seq !== requestSeq) return;
     RIDES.key = null;
@@ -1116,27 +1007,6 @@ function rulerArrow() {
   RULER.arrow = arrowMarker(RULER.points[0], RULER.points[RULER.points.length - 1]).addTo(RULER.layer);
 }
 
-// An arrowhead halfway from `from` to `to`, pointing along it.
-function arrowMarker(from, to) {
-  [from, to] = [L.latLng(from), L.latLng(to)];
-  const mid = L.latLng((from.lat + to.lat) / 2, (from.lng + to.lng) / 2);
-  const dy = (to.lat - from.lat) * METRES_PER_DEG_LAT;
-  const dx = (to.lng - from.lng) * METRES_PER_DEG_LAT * Math.cos((mid.lat * Math.PI) / 180);
-  const degrees = (Math.atan2(dx, dy) * 180) / Math.PI; // 0 = north, clockwise
-  return L.marker(mid, {
-    interactive: false,
-    keyboard: false,
-    icon: L.divIcon({
-      className: "ruler-arrow",
-      iconSize: [18, 18],
-      html:
-        `<svg viewBox="0 0 18 18" width="18" height="18" ` +
-        `style="transform: rotate(${degrees.toFixed(1)}deg)">` +
-        `<path d="M9 1 L15 15 L9 11.5 L3 15 Z" fill="#16202a"/></svg>`,
-    }),
-  });
-}
-
 function rulerRedraw() {
   if (RULER.line) RULER.line.setLatLngs(RULER.points);
   rulerArrow();
@@ -1285,31 +1155,6 @@ function rulerBoot() {
 // On a phone the open panel covers most of the map, so it folds down to its
 // title and summary line. The button only shows on narrow screens; the choice
 // is remembered per visitor.
-const PANEL_KEY = "panelCollapsed";
-
-function panelCollapse(collapsed) {
-  els.panel.classList.toggle("collapsed", collapsed);
-  els.panelToggle.setAttribute("aria-expanded", String(!collapsed));
-  const label = t(collapsed ? "showControls" : "hideControls");
-  els.panelToggle.title = label;
-  els.panelToggle.setAttribute("aria-label", label);
-}
-
-function panelBoot() {
-  let saved = false;
-  try {
-    saved = localStorage.getItem(PANEL_KEY) === "1";
-  } catch {}
-  panelCollapse(saved);
-  els.panelToggle.addEventListener("click", () => {
-    const collapsed = !els.panel.classList.contains("collapsed");
-    panelCollapse(collapsed);
-    try {
-      localStorage.setItem(PANEL_KEY, collapsed ? "1" : "0");
-    } catch {}
-  });
-}
-
 panelBoot();
 
 /* ---------- language ---------- */
@@ -1342,7 +1187,6 @@ function relabel() {
   panelCollapse(els.panel.classList.contains("collapsed"));
   map.closePopup();
   if (RULER.on) els.rides.innerHTML = ridesReadout();
-  lanesRender();
   if (currentRides()) els.subtitle.textContent = describe();
 }
 

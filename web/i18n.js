@@ -31,6 +31,11 @@ const I18N = {
     lanesLost: ({ min }) => `${min} bus-min/day`,
     lanesPerKm: ({ min }) => `${min} bus-min/km/day`,
     lanesBuses: ({ n }) => `${n} buses/h`,
+    lanesTitle: "Where Lviv needs bus lanes — stretches ranked by rush-hour bus time lost",
+    lanesDescription:
+      "The Lviv bus stretches where a bus-only lane would win back the most time: weekday rush-hour delay against midday, in bus-minutes lost per km, measured on archived GTFS-RT vehicles.",
+    lanesLink: "Where bus lanes would pay →",
+    lanesBack: "← Ride-time map",
     langName: "English",
 
     // Crawlable and screen-reader text.
@@ -118,6 +123,11 @@ const I18N = {
     lanesLost: ({ min }) => `${min} хв автобусів/день`,
     lanesPerKm: ({ min }) => `${min} хв/км/день`,
     lanesBuses: ({ n }) => `автобусів/год: ${n}`,
+    lanesTitle: "Де Львову потрібні смуги для автобусів — ділянки за втраченим у пік часом",
+    lanesDescription:
+      "Ділянки автобусної мережі Львова, де виділена смуга повернула б найбільше часу: затримка в будні години пік відносно полудня, у хвилинах автобусів на кілометр, за архівом GTFS-RT.",
+    lanesLink: "Де потрібні смуги для автобусів →",
+    lanesBack: "← Карта часу поїздки",
     langName: "Українська",
 
     aboutH: "Що показує ця карта",
@@ -229,8 +239,10 @@ function monthName(key) {
 // The page's own markup: data-i18n sets text, data-i18n-html markup.
 function translatePage() {
   document.documentElement.lang = LANG;
-  document.title = t("title");
-  document.querySelector('meta[name="description"]').content = t("description");
+  // A page other than the map names its own title keys on <html>.
+  const html = document.documentElement.dataset;
+  document.title = t(html.title || "title");
+  document.querySelector('meta[name="description"]').content = t(html.description || "description");
   for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
   for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = t(el.dataset.i18nHtml);
   for (const b of document.querySelectorAll("[data-lang]")) {

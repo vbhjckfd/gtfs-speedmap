@@ -122,18 +122,11 @@ input[type="range"] {
   color: var(--muted);
 }
 
-.lanes {
+.page-link {
+  display: block;
   margin: 8px 0;
   font-size: 12px;
-}
-
-.lanes summary {
-  cursor: pointer;
   font-weight: 650;
-}
-
-.lanes .note {
-  margin: 4px 0;
 }
 
 .credit {

@@ -34,8 +34,35 @@ def _metres(a: list, b: list) -> float:
     return math.hypot(dx, dy)
 
 
+def _along(points: list, cum: list[float], at: float) -> list[float]:
+    """The point `at` metres into a polyline whose vertices sit `cum` metres in."""
+    for (p, q), (c0, c1) in zip(zip(points, points[1:]), zip(cum, cum[1:])):
+        if c1 >= at:
+            t = (at - c0) / (c1 - c0) if c1 > c0 else 0
+            return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+    return list(points[-1][:2])
+
+
+def _line(route: dict, i: int, stops: dict) -> list[list[float]]:
+    """Leg i of a route as the viewer draws it: its shape between the two stops.
+
+    Mirrors legLine in web/app.js; a route without a shape is drawn stop to stop.
+    """
+    a, b = route["path"][i], route["path"][i + 1]
+    straight = [list(stops[s][:2]) for s in (a, b) if s in stops]
+    shape, dist = route.get("shape"), route.get("dist")
+    if not shape or not dist or not dist[i + 1] > dist[i]:
+        return straight
+    cum = [0.0]
+    for p, q in zip(shape, shape[1:]):
+        cum.append(cum[-1] + _metres(p, q))
+    start, end = dist[i], dist[i + 1]
+    inside = [list(p[:2]) for p, c in zip(shape, cum) if start < c < end]
+    return [_along(shape, cum, start), *inside, _along(shape, cum, end)]
+
+
 def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
-    """Every stop pair once, with the route legs that drive it and its length."""
+    """Every stop pair once, with the route legs that drive it, its length and line."""
     legs: dict[str, dict] = {}
     for route in paths:
         key = f"{route['route']}|{route['dir']}"
@@ -49,7 +76,14 @@ def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
                     length = _metres(stops[a], stops[b])
                 else:
                     continue
-                leg = legs[f"{a}>{b}"] = {"a": a, "b": b, "length": length, "members": [], "names": set()}
+                leg = legs[f"{a}>{b}"] = {
+                    "a": a,
+                    "b": b,
+                    "length": length,
+                    "line": _line(route, i, stops),
+                    "members": [],
+                    "names": set(),
+                }
             leg["members"].append((key, i))
             leg["names"].add(route["name"])
     return legs
@@ -148,6 +182,8 @@ def rank_corridors(
                 "from": stops.get(members[0]["a"], [0, 0, members[0]["a"]])[2],
                 "to": stops.get(members[-1]["b"], [0, 0, members[-1]["b"]])[2],
                 "legs": chain,
+                # Drawn as is by /suggestions, which loads no route geometry of its own.
+                "lines": [[[round(c, 5) for c in p] for p in m["line"]] for m in members],
                 "length_m": round(length),
                 "routes": sorted(set().union(*(m["names"] for m in members))),
                 "lost_min": round(lost_min, 1),

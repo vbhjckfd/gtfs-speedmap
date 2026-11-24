@@ -134,8 +134,10 @@ busiest stream — where routes join or split, the corridor follows the leg with
 the lighter branch starts its own — and corridors under `LANE_MIN_M` (300 m) are dropped. They are
 ranked by **bus-minutes lost per weekday rush per km of lane** — rides × seconds over midday,
 divided by length — so a busy street beats a slow, empty one and a short bottleneck beats a long,
-mildly slow street. Pooled means are used, not medians, because only the mean adds up. Shown in the
-panel; clicking a row draws the corridor with its direction.
+mildly slow street. Pooled means are used, not medians, because only the mean adds up. Shown on
+their own page, [`/suggestions`](https://speedmap.lad.lviv.ua/suggestions), linked from the map's
+panel. Each corridor ships its legs already drawn along the route shapes (`lines`), so that page
+loads only `lanes-<month>.json`; clicking a row draws the corridor with its direction.
 
 ## Ride time between two points
 
