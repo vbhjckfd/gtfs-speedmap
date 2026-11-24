@@ -127,11 +127,15 @@ A leg seen on fewer than `SEG_MIN_OBS` rides in a slot is left out (`null`) rath
 ## Bus lane candidates
 
 [`lanes.py`](src/speedmap/lanes.py) ranks where a bus-only lane would pay. A leg is *hot* when its
-weekday rush-hour ride time (07–09, 16–18) is at least `HOT_DELAY` (+25%) over its own off-peak.
-Adjacent hot legs with no fork between them merge into a corridor, dropped under `LANE_MIN_M`
-(300 m). Corridors are ranked by **bus-minutes lost per weekday rush** — rides × seconds over
-off-peak — so a busy street beats a slow, empty one. Pooled means are used, not medians, because
-only the mean adds up. Shown in the panel; clicking a row draws the corridor.
+weekday rush-hour ride time (07–09, 16–18) is at least `HOT_DELAY` (+25%) over weekday midday
+(10–15). Midday, not the quickest hour, is the yardstick: a lane cannot give buses empty night
+roads, only take back what rush traffic adds. Adjacent hot legs merge into a corridor along the
+busiest stream — where routes join or split, the corridor follows the leg with the most buses and
+the lighter branch starts its own — and corridors under `LANE_MIN_M` (300 m) are dropped. They are
+ranked by **bus-minutes lost per weekday rush per km of lane** — rides × seconds over midday,
+divided by length — so a busy street beats a slow, empty one and a short bottleneck beats a long,
+mildly slow street. Pooled means are used, not medians, because only the mean adds up. Shown in the
+panel; clicking a row draws the corridor with its direction.
 
 ## Ride time between two points
 

@@ -424,9 +424,11 @@ const LANES = { list: [], layer: null };
 
 async function loadLanes() {
   const month = els.month.value;
-  const list = await fetchSelection(`lanes-${month}`).catch(() => []);
+  // A month built before lanes.py has no file: hide the panel, not "none qualify".
+  const list = await fetchSelection(`lanes-${month}`).catch(() => null);
   if (month !== els.month.value) return;
-  LANES.list = list;
+  els.lanesList.closest("details").hidden = !list;
+  LANES.list = list || [];
   lanesRender();
 }
 
@@ -437,9 +439,9 @@ function laneClear() {
 
 function lanesRender() {
   laneClear();
-  const stops = LANES.list;
-  els.lanesList.innerHTML = stops.length
-    ? stops.map(laneRow).join("")
+  const list = LANES.list;
+  els.lanesList.innerHTML = list.length
+    ? list.map(laneRow).join("")
     : `<div class="ride-empty">${t("lanesNone")}</div>`;
 }
 
@@ -452,9 +454,10 @@ function laneRow(c, i) {
   return (
     `<button type="button" class="ride-row" data-lane="${i}">` +
     `<span class="ride-name">${i + 1}</span>` +
-    `<span class="ride-time">${t("lanesLost", { min: Math.round(c.lost_min) })}</span>` +
+    `<span class="ride-time">${t("lanesPerKm", { min: Math.round(c.lost_per_km) })}</span>` +
     `<span class="ride-detail">${c.from} → ${c.to}<br>` +
-    `${km} ${t("km")} · ${t("lanesBuses", { n: Math.round(c.buses) })} · ` +
+    `${km} ${t("km")} · ${t("lanesLost", { min: Math.round(c.lost_min) })} · ` +
+    `${t("lanesBuses", { n: Math.round(c.buses) })} · ` +
     `+${Math.round(c.delay * 100)}% · ${routes}</span>` +
     `</button>`
   );
@@ -465,12 +468,15 @@ function laneShow(c) {
   const byKey = new Map(RIDES.legs.map((leg) => [`${leg.a}>${leg.b}`, leg.points]));
   const lines = c.legs.map((k) => byKey.get(k)).filter(Boolean);
   if (!lines.length) return;
-  LANES.layer = L.polyline(lines, {
-    color: "#3b6ea5",
-    weight: 9,
-    opacity: 0.55,
-    interactive: false,
-  }).addTo(map);
+  // A lane serves one direction, so each leg carries an arrowhead.
+  const arrows = lines.map((pts) => {
+    const i = Math.floor((pts.length - 2) / 2);
+    return arrowMarker(pts[i], pts[i + 1]);
+  });
+  LANES.layer = L.featureGroup([
+    L.polyline(lines, { color: "#3b6ea5", weight: 9, opacity: 0.55, interactive: false }),
+    ...arrows,
+  ]).addTo(map);
   map.fitBounds(LANES.layer.getBounds(), { maxZoom: 16, padding: [60, 60] });
 }
 
@@ -1107,12 +1113,17 @@ function rulerArrow() {
     RULER.arrow = null;
   }
   if (RULER.points.length < 2) return;
-  const [from, to] = [RULER.points[0], RULER.points[RULER.points.length - 1]];
+  RULER.arrow = arrowMarker(RULER.points[0], RULER.points[RULER.points.length - 1]).addTo(RULER.layer);
+}
+
+// An arrowhead halfway from `from` to `to`, pointing along it.
+function arrowMarker(from, to) {
+  [from, to] = [L.latLng(from), L.latLng(to)];
   const mid = L.latLng((from.lat + to.lat) / 2, (from.lng + to.lng) / 2);
   const dy = (to.lat - from.lat) * METRES_PER_DEG_LAT;
   const dx = (to.lng - from.lng) * METRES_PER_DEG_LAT * Math.cos((mid.lat * Math.PI) / 180);
   const degrees = (Math.atan2(dx, dy) * 180) / Math.PI; // 0 = north, clockwise
-  RULER.arrow = L.marker(mid, {
+  return L.marker(mid, {
     interactive: false,
     keyboard: false,
     icon: L.divIcon({
@@ -1123,7 +1134,7 @@ function rulerArrow() {
         `style="transform: rotate(${degrees.toFixed(1)}deg)">` +
         `<path d="M9 1 L15 15 L9 11.5 L3 15 Z" fill="#16202a"/></svg>`,
     }),
-  }).addTo(RULER.layer);
+  });
 }
 
 function rulerRedraw() {

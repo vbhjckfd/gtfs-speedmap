@@ -1,4 +1,4 @@
-"""Bus-lane candidates: delayed stretches ranked by the bus time they cost."""
+"""Bus-lane candidates: delayed stretches ranked by the bus time they cost per km."""
 
 from __future__ import annotations
 
@@ -6,35 +6,38 @@ import pytest
 
 from speedmap.lanes import rank_corridors
 
-STOPS = {s: [49.8, 24.0 + i * 0.005, f"Stop {s}"] for i, s in enumerate("123456")}
+STOPS = {s: [49.8, 24.0 + i * 0.005, f"Stop {s}"] for i, s in enumerate("1234567")}
 
 
-def route(path: list[str], name: str = "A1", direction: str = "0") -> dict:
+def route(path: str, name: str = "A1") -> dict:
+    """A route over single-character stop ids, 400 m between stops."""
     return {
         "route": name,
-        "dir": direction,
+        "dir": "0",
         "name": name,
-        "path": path,
+        "path": list(path),
         "dist": [400 * i for i in range(len(path))],
     }
 
 
-def payload(*legs: tuple[int, int]) -> dict:
-    """One route's hour: (avg seconds, rides) per leg."""
+def hour(**routes: list[tuple[int, int]]) -> dict:
+    """One hour's payload: per route, (avg seconds, rides) per leg."""
     return {
-        "A1|0": {
+        f"{name}|0": {
             "avg": [s for s, _ in legs],
             "med": [s for s, _ in legs],
             "n": [n for _, n in legs],
         }
+        for name, legs in routes.items()
     }
 
 
-def test_adjacent_delayed_legs_merge_into_one_ranked_corridor():
-    paths = [route(["1", "2", "3", "4"])]
+def test_adjacent_delayed_legs_merge_into_one_corridor_timed_against_midday():
+    paths = [route("1234")]
     by_hour = {
-        12: payload((60, 100), (60, 100), (60, 100)),  # off-peak
-        8: payload((120, 100), (120, 100), (60, 100)),  # legs 1-2 and 2-3 double
+        22: hour(A1=[(30, 100)] * 3),  # empty night roads are not the yardstick
+        12: hour(A1=[(60, 100)] * 3),
+        8: hour(A1=[(120, 100), (120, 100), (60, 100)]),  # legs 1-2 and 2-3 double
     }
     (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
 
@@ -43,41 +46,59 @@ def test_adjacent_delayed_legs_merge_into_one_ranked_corridor():
     assert corridor["legs"] == ["1>2", "2>3"]
     assert corridor["length_m"] == 800
     assert corridor["routes"] == ["A1"]
-    # 2 legs x 100 rides x 60 s lost, over 20 weekdays = 600 s = 10 bus-minutes.
+    # 2 legs x 100 rides x 60 s over midday, over 20 weekdays = 600 s = 10 bus-minutes.
     assert corridor["lost_min"] == pytest.approx(10)
+    assert corridor["lost_per_km"] == pytest.approx(12.5)
     assert corridor["buses"] == pytest.approx(5)
     assert corridor["delay"] == pytest.approx(1.0)
 
 
 def test_corridor_shorter_than_a_lane_is_worth_is_dropped():
-    paths = [route(["1", "2", "3"])]
+    paths = [route("123")]
     by_hour = {
-        12: payload((60, 100), (60, 100)),
-        8: payload((120, 100), (60, 100)),  # one delayed 400 m leg only
+        12: hour(A1=[(60, 100), (60, 100)]),
+        8: hour(A1=[(120, 100), (60, 100)]),  # one delayed 400 m leg only
     }
     assert rank_corridors(paths, STOPS, by_hour, weekdays=20, min_m=500) == []
 
 
-def test_worst_corridor_comes_first_and_slow_legs_without_traffic_do_not_count():
-    paths = [route(["1", "2", "3"], "A1"), route(["4", "5", "6"], "B2")]
+def test_short_dense_bottleneck_outranks_a_long_mildly_slow_street():
+    paths = [route("12", "A1"), route("3456", "B2")]
     by_hour = {
-        12: {
-            "A1|0": {"avg": [60, 60], "med": [60, 60], "n": [100, 100]},
-            "B2|0": {"avg": [60, 60], "med": [60, 60], "n": [100, 100]},
-        },
-        8: {
-            "A1|0": {"avg": [90, 90], "med": [90, 90], "n": [100, 100]},
-            "B2|0": {"avg": [120, 120], "med": [120, 120], "n": [100, 100]},
-        },
+        12: hour(A1=[(60, 100)], B2=[(60, 100)] * 3),
+        # A1: 400 m, 7.5 bus-min lost. B2: 1200 m, 10 bus-min lost.
+        8: hour(A1=[(150, 100)], B2=[(100, 100)] * 3),
     }
     ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20)
-    assert [c["routes"] for c in ranked] == [["B2"], ["A1"]]
+    assert [c["routes"] for c in ranked] == [["A1"], ["B2"]]
 
 
-def test_leg_without_a_trusted_off_peak_is_ignored():
-    paths = [route(["1", "2", "3"])]
+def test_street_carries_on_through_a_stop_where_a_lighter_route_joins():
+    paths = [route("1234", "A1"), route("52", "B2")]
     by_hour = {
-        12: payload((60, 3), (60, 3)),  # too few rides to be a baseline
-        8: payload((120, 100), (120, 100)),
+        12: hour(A1=[(60, 100)] * 3, B2=[(60, 20)]),
+        8: hour(A1=[(120, 100)] * 3, B2=[(120, 20)]),
+    }
+    legs = sorted(c["legs"] for c in rank_corridors(paths, STOPS, by_hour, weekdays=20))
+    assert legs == [["1>2", "2>3", "3>4"], ["5>2"]]
+
+
+def test_street_follows_the_busier_branch_where_routes_split():
+    # Both drive 1>2, then A1 goes on to 3 and the lighter B2 turns off to 6.
+    paths = [route("123", "A1"), route("126", "B2")]
+    by_hour = {
+        12: hour(A1=[(60, 100)] * 2, B2=[(60, 20)] * 2),
+        8: hour(A1=[(120, 100)] * 2, B2=[(120, 20)] * 2),
+    }
+    legs = sorted(c["legs"] for c in rank_corridors(paths, STOPS, by_hour, weekdays=20))
+    assert legs == [["1>2", "2>3"], ["2>6"]]
+
+
+def test_leg_without_a_trusted_midday_baseline_is_ignored():
+    paths = [route("123")]
+    by_hour = {
+        12: hour(A1=[(60, 3)] * 2),  # too few rides to be a baseline
+        22: hour(A1=[(30, 100)] * 2),  # plenty at night, but night is not the yardstick
+        8: hour(A1=[(120, 100)] * 2),
     }
     assert rank_corridors(paths, STOPS, by_hour, weekdays=20) == []
