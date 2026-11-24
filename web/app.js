@@ -33,6 +33,7 @@ const els = {
   rides: document.getElementById("rides"),
   rulerClear: document.getElementById("ruler-clear"),
   lanesLink: document.getElementById("lanes-link"),
+  slowLink: document.getElementById("slow-link"),
   rulerButton: null, // the map control, created below
   panel: document.getElementById("panel"),
   panelToggle: document.getElementById("panel-toggle"),
@@ -376,9 +377,11 @@ const legsLayer = new LegLayer();
 
 /* ---------- bus lane candidates ---------- */
 
-// Its own page; the link carries the month and language over.
+// Their own pages; the links carry the month and language over.
 function lanesLink() {
-  els.lanesLink.href = `suggestions?month=${els.month.value}&lang=${LANG}`;
+  const query = `?month=${els.month.value}&lang=${LANG}`;
+  els.lanesLink.href = `suggestions${query}`;
+  els.slowLink.href = `slowest${query}`;
 }
 
 /* ---------- shareable URL ---------- */

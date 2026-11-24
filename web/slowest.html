@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-title="slowTitle" data-description="slowDescription">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Lviv's slowest bus stretches — ranked by delay against empty roads</title>
+    <meta
+      name="description"
+      content="Stretches of Lviv street where weekday buses run slowest against empty roads, among streets with at least six buses an hour."
+    />
+    <link rel="canonical" href="https://speedmap.lad.lviv.ua/slowest" />
+    <meta name="robots" content="index, follow" />
+    <link rel="license" href="https://creativecommons.org/licenses/by/4.0/" />
+    <meta name="theme-color" content="#0e141c" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180" />
+
+    <link rel="preload" href="data/index.json" as="fetch" crossorigin="anonymous" />
+    <link rel="preconnect" href="https://tiles.lad.lviv.ua" crossorigin />
+
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-list="slow">
+    <div id="map"></div>
+
+    <div class="panel" id="panel">
+      <div class="panel-head">
+        <h1 data-i18n="slowH">Slowest stretches</h1>
+        <div class="lang-switch" role="group" aria-label="Language / Мова">
+          <button type="button" data-lang="en" title="English" aria-label="English" aria-pressed="false">
+            <svg viewBox="0 0 60 30" width="26" height="13" aria-hidden="true"><clipPath id="gb-t"><path d="M30 15h30v15zv15H0zH0V0zV0h30z"/></clipPath><path d="M0 0h60v30H0z" fill="#012169"/><path d="M0 0l60 30m0-30L0 30" stroke="#fff" stroke-width="6"/><path d="M0 0l60 30m0-30L0 30" clip-path="url(#gb-t)" stroke="#c8102e" stroke-width="4"/><path d="M30 0v30M0 15h60" stroke="#fff" stroke-width="10"/><path d="M30 0v30M0 15h60" stroke="#c8102e" stroke-width="6"/></svg>
+          </button>
+          <button type="button" data-lang="uk" title="Українська" aria-label="Українська" aria-pressed="false">
+            <svg viewBox="0 0 3 2" width="20" height="13" aria-hidden="true"><path fill="#0057b7" d="M0 0h3v1H0z"/><path fill="#ffd700" d="M0 1h3v1H0z"/></svg>
+          </button>
+        </div>
+        <button type="button" class="panel-toggle" id="panel-toggle" aria-controls="panel-body" aria-expanded="true">
+          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 8l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+
+      <div class="panel-body" id="panel-body">
+        <label class="field">
+          <span data-i18n="month">Month</span>
+          <select id="month"></select>
+        </label>
+
+        <p class="note" data-i18n="slowNote"></p>
+        <div class="rides" id="lanes-list"></div>
+
+        <p class="credit">
+          <a class="page-link" id="other-link" href="suggestions" data-i18n="lanesLink">Where bus lanes would pay →</a><br />
+          <a class="page-link" id="back-link" href="./" data-i18n="lanesBack">← Ride-time map</a>
+        </p>
+      </div>
+    </div>
+
+    <noscript>
+      <p style="padding: 1rem">This page needs JavaScript.<br />Ця сторінка потребує JavaScript.</p>
+    </noscript>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="vendor/protomaps-leaflet/protomaps-leaflet.js"></script>
+    <script src="i18n.js"></script>
+    <script src="map.js"></script>
+    <script src="suggestions.js"></script>
+  </body>
+</html>

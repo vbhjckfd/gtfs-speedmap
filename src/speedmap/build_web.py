@@ -34,7 +34,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from .lanes import rank_corridors
+from .lanes import SLOW_MIN_BUSES, rank_corridors
 from .traces import TRACE_KEYS, dense_shapes
 from .config import (
     SEG_BIN_S,
@@ -311,7 +311,11 @@ def build_month(month: str) -> dict:
     leg_slices, seg_bin_slices, paths, stops = load_ride_slices(month)
     if not leg_slices:
         raise SystemExit(f"no leg times for {month} in {SEG_DIR} — run `make ingest` first")
-    paths = dense_shapes(paths, stops, load_traces(month))
+    totals = _combine_rides(leg_slices, month, ALL, ["hour", *SEG_KEYS])
+    totals = totals.groupby(SEG_KEYS)[SEG_SUMS].sum()
+    seconds = dict(zip(totals.index, totals["sum_s"] / totals["n"]))
+    paths = dense_shapes(paths, stops, load_traces(month), seconds)
+    del totals
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
     written: set[str] = set()
 
@@ -348,10 +352,17 @@ def build_month(month: str) -> dict:
     # Geometry is the same whatever day type or hour is on screen, so it ships
     # once per month and the selection files carry only numbers.
     write(f"paths-{month}", {"stops": stops, "routes": paths})
+    weekdays = types.get("wd", 0)
     write(
         f"lanes-{month}",
-        rank_corridors(paths, stops, weekday_rides, types.get("wd", 0))
-        if types.get("wd")
+        rank_corridors(paths, stops, weekday_rides, weekdays) if weekdays else [],
+    )
+    write(
+        f"lanes-slow-{month}",
+        rank_corridors(
+            paths, stops, weekday_rides, weekdays, order="delay", min_buses=SLOW_MIN_BUSES
+        )
+        if weekdays
         else [],
     )
 

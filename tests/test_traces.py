@@ -60,7 +60,7 @@ def nearest(line, point):
 
 def test_a_route_with_no_shape_is_drawn_round_the_corner_its_buses_take(feed, monkeypatch):
     monkeypatch.setattr("speedmap.segments.TRACE_MAX_OFF_M", 1000)
-    (r,) = dense_shapes([route()], STOPS, traced(feed, runs=6))
+    (r,) = dense_shapes([route()], STOPS, traced(feed, runs=6), seconds={})
 
     assert nearest(r["shape"], CORNER) < 25
     # Each stop sits where its leg starts, the distances measured along the new line.
@@ -74,14 +74,45 @@ def test_a_route_with_no_shape_is_drawn_round_the_corner_its_buses_take(feed, mo
 
 def test_samples_far_off_the_reference_line_are_left_out(feed):
     # At the default limit a 900 m bend reads as a diversion, not the street.
-    (r,) = dense_shapes([route()], STOPS, traced(feed, runs=6))
+    (r,) = dense_shapes([route()], STOPS, traced(feed, runs=6), seconds={})
     assert nearest(r["shape"], CORNER) > 300
 
 
 def test_too_few_buses_leave_the_reference_line_in_place(feed, monkeypatch):
     monkeypatch.setattr("speedmap.segments.TRACE_MAX_OFF_M", 1000)
-    (r,) = dense_shapes([route()], STOPS, traced(feed, runs=1))
+    (r,) = dense_shapes([route()], STOPS, traced(feed, runs=1), seconds={})
     assert "shape" not in r
+
+
+def detoured_route():
+    """The route with a feed shape that wanders 2 km east between START and N."""
+    east = (STOP_START[0], STOP_START[1] + 0.03)
+    shape = [stop_ll(STOP_START), list(east), stop_ll(STOP_NORTH), stop_ll(STOP_FAR)]
+    first = metres(STOP_START, east) + metres(east, STOP_NORTH)
+    return {**route(), "shape": shape, "dist": [0, first, first + metres(STOP_NORTH, STOP_FAR)]}
+
+
+def test_bins_placed_on_another_reference_line_are_left_out(feed, monkeypatch):
+    # Traced against the straight line; the month's paths now carry a detoured
+    # shape, so the bins' metres-along mean nothing on it.
+    monkeypatch.setattr("speedmap.segments.TRACE_MAX_OFF_M", 1000)
+    detoured = detoured_route()
+    (r,) = dense_shapes([detoured], STOPS, traced(feed, runs=6), seconds={})
+    assert r["dist"][1] == pytest.approx(detoured["dist"][1], abs=2)
+    assert nearest(r["shape"], CORNER) > 300
+
+
+def test_a_reference_no_bus_could_drive_in_time_is_drawn_straight():
+    # 2.5 km of shape for a leg the buses cover in 60 s is the wrong pass of
+    # the shape, not the street.
+    (r,) = dense_shapes(
+        [detoured_route()],
+        STOPS,
+        pd.DataFrame(columns=TRACE_COLUMNS),
+        seconds={("R_BUS", "0", "START", "N"): 60},
+    )
+    assert r["dist"][1] == pytest.approx(metres(STOP_START, STOP_NORTH), abs=2)
+    assert r["shape"][1] == pytest.approx(stop_ll(STOP_NORTH), abs=1e-5)
 
 
 def test_project_is_the_projection_the_runs_use():

@@ -1,7 +1,10 @@
 /* /suggestions: the stretches where a bus lane would win back the most bus
- * time, one month at a time. Each corridor carries its own drawn legs, so the
- * page needs neither the paths file nor the ride-time slots.
+ * time, one month at a time. /slowest, the same page with <body data-list="slow">:
+ * the stretches most delayed against empty roads. Each corridor carries its own
+ * drawn legs, so the page needs neither the paths file nor the ride-time slots.
  */
+
+const SLOW = document.body.dataset.list === "slow";
 
 const { map } = makeMap();
 panelBoot();
@@ -10,6 +13,7 @@ const els = {
   month: document.getElementById("month"),
   list: document.getElementById("lanes-list"),
   back: document.getElementById("back-link"),
+  other: document.getElementById("other-link"),
 };
 
 let index = null;
@@ -28,6 +32,7 @@ function writeUrl() {
   const query = `?month=${els.month.value}&lang=${LANG}`;
   history.replaceState(null, "", query);
   els.back.href = `./${query}`;
+  els.other.href = `${SLOW ? "suggestions" : "slowest"}${query}`;
 }
 
 function fillMonths(selected) {
@@ -51,14 +56,16 @@ function row(c, i) {
     maximumFractionDigits: 1,
   });
   const routes = c.routes.slice(0, 6).join(", ") + (c.routes.length > 6 ? "…" : "");
+  const delay = `+${Math.round(c.delay * 100)}%`;
+  const perKm = t("lanesPerKm", { min: Math.round(c.lost_per_km) });
   return (
     `<button type="button" class="ride-row" data-lane="${i}">` +
     `<span class="ride-name">${i + 1}</span>` +
-    `<span class="ride-time">${t("lanesPerKm", { min: Math.round(c.lost_per_km) })}</span>` +
+    `<span class="ride-time">${SLOW ? delay : perKm}</span>` +
     `<span class="ride-detail">${c.from} → ${c.to}<br>` +
     `${km} ${t("km")} · ${t("lanesLost", { min: Math.round(c.lost_min) })} · ` +
     `${t("lanesBuses", { n: Math.round(c.buses) })} · ` +
-    `+${Math.round(c.delay * 100)}% · ${routes}</span>` +
+    `${SLOW ? perKm : delay} · ${routes}</span>` +
     `</button>`
   );
 }
@@ -119,7 +126,7 @@ async function load() {
   writeUrl();
   const month = els.month.value;
   try {
-    const res = await fetch(`data/lanes-${month}.json`);
+    const res = await fetch(`data/lanes-${SLOW ? "slow-" : ""}${month}.json`);
     corridors = res.ok ? await res.json() : [];
   } catch {
     corridors = [];

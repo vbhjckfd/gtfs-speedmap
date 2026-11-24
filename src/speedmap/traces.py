@@ -11,7 +11,7 @@ is placed along the line and to its left or right, and the placings are summed
 in TRACE_BIN_M bins (the ingest side). At build time a bin's mean placing is a
 point of the street, and the bins in order are the leg's new line:
 
-    data/trace/YYYY-MM-DD.parquet  (route, direction, pair, bin) -> n, sum_s, sum_off
+    data/trace/YYYY-MM-DD.parquet  (route, direction, pair, ref_m, bin) -> n, sum_s, sum_off
 
 Along and off rather than coordinates, because UTM cannot be turned back into
 lat/lon here, and an offset from a line is the same length in either.
@@ -24,11 +24,16 @@ from bisect import bisect_left, bisect_right
 
 import pandas as pd
 
-from .config import SHAPE_TOLERANCE_M, TRACE_BIN_M, TRACE_MIN_N
+from .config import SHAPE_TOLERANCE_M, SPEED_MAX_MPS, TRACE_BIN_M, TRACE_MIN_N
 from .geometry import cumulative, simplify
 from .grid import project
 
-TRACE_KEYS = ["route_id", "direction", "from_stop", "to_stop"]
+# ref_m is the length of the reference line the bins were placed on: the feed
+# re-cuts a leg's shape when its timetable changes, and metres along one line
+# mean nothing on another.
+TRACE_KEYS = ["route_id", "direction", "from_stop", "to_stop", "ref_m"]
+# Bins match the month's line within this; its shape went through JSON rounding.
+REF_MATCH_M = 2
 TRACE_COLUMNS = [*TRACE_KEYS, "bin", "n", "sum_s", "sum_off"]
 
 M_PER_DEG = 111320
@@ -106,7 +111,7 @@ def trace_leg(
         s, off = _placed(xy, cum, x, y)
         if abs(off) > max_off:
             continue  # a diversion or a GPS jump, not this street
-        bucket = trace.setdefault((*key, int(s // TRACE_BIN_M)), [0, 0.0, 0.0])
+        bucket = trace.setdefault((*key, round(cum[-1]), int(s // TRACE_BIN_M)), [0, 0.0, 0.0])
         bucket[0] += 1
         bucket[1] += s
         bucket[2] += off
@@ -131,38 +136,51 @@ def _point(line: list, xy: list, cum: list[float], s: float, off: float) -> list
     return [lat + off * east / length / M_PER_DEG, lon - off * north / length / k]
 
 
-def dense_shapes(paths: list[dict], stops: dict, trace: pd.DataFrame) -> list[dict]:
+def dense_shapes(
+    paths: list[dict], stops: dict, trace: pd.DataFrame, seconds: dict[tuple, float]
+) -> list[dict]:
     """The routes with each traced leg redrawn through its buses' mean positions.
 
-    A leg with no bin of TRACE_MIN_N samples keeps its reference line; a route
-    with no traced leg at all is returned as it came. Each leg is simplified on
-    its own, so every stop stays a vertex and `dist` stays exact at the stops.
+    A leg with no bin of TRACE_MIN_N samples on its current reference line keeps
+    that line, unless covering it in the leg's mean `seconds` would take more
+    than SPEED_MAX_MPS: then the feed's dist points at the wrong pass of the
+    shape and the leg is drawn stop to stop. A route with nothing redrawn is
+    returned as it came. Each leg is simplified on its own, so every stop stays
+    a vertex and `dist` stays exact at the stops.
     """
-    if trace.empty:
-        return paths
-    trace = trace.groupby([*TRACE_KEYS, "bin"], sort=False)[["n", "sum_s", "sum_off"]].sum()
-    trace = trace[trace["n"] >= TRACE_MIN_N].sort_index()
-    bins: dict[tuple, list[tuple[float, float]]] = {}
-    for (*key, _), (n, sum_s, sum_off) in zip(trace.index, trace.to_numpy()):
-        bins.setdefault(tuple(key), []).append((sum_s / n, sum_off / n))
+    bins: dict[tuple, dict[int, list[tuple[float, float]]]] = {}
+    if not trace.empty:
+        trace = trace.groupby([*TRACE_KEYS, "bin"], sort=False)[["n", "sum_s", "sum_off"]].sum()
+        trace = trace[trace["n"] >= TRACE_MIN_N].sort_index()
+        for (*key, ref_m, _), (n, sum_s, sum_off) in zip(trace.index, trace.to_numpy()):
+            by_ref = bins.setdefault(tuple(key), {})
+            by_ref.setdefault(int(ref_m), []).append((sum_s / n, sum_off / n))
 
-    return [_redrawn(route, stops, bins) or route for route in paths]
+    return [_redrawn(route, stops, bins, seconds) or route for route in paths]
 
 
-def _redrawn(route: dict, stops: dict, bins: dict) -> dict | None:
-    legs, traced = [], False
+def _placings(by_ref: dict[int, list], length: float) -> list:
+    return next((p for ref_m, p in by_ref.items() if abs(ref_m - length) <= REF_MATCH_M), [])
+
+
+def _redrawn(route: dict, stops: dict, bins: dict, seconds: dict) -> dict | None:
+    legs, changed = [], False
     for i, (a, b) in enumerate(zip(route["path"], route["path"][1:])):
         line = leg_line(route, i, stops)
         if len(line) < 2:
             return None  # a stop without coordinates: no way to place the rest
-        placings = bins.get((route["route"], route["dir"], a, b))
+        key = (route["route"], route["dir"], a, b)
+        xy, cum = utm_line(line)
+        placings = _placings(bins.get(key, {}), cum[-1])
         if placings:
-            traced = True
-            xy, cum = utm_line(line)
+            changed = True
             line = [line[0], *(_point(line, xy, cum, s, off) for s, off in placings), line[-1]]
+        elif len(line) > 2 and cum[-1] > SPEED_MAX_MPS * seconds.get(key, math.inf):
+            changed = True
+            line = [line[0], line[-1]]
         keep = simplify(utm_line(line)[0], SHAPE_TOLERANCE_M)
         legs.append([line[k] for k in keep])
-    if not traced:
+    if not changed:
         return None
 
     shape, dist, total = [legs[0][0]], [0], 0.0

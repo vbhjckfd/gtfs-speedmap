@@ -32,12 +32,12 @@ def hour(**routes: list[tuple[int, int]]) -> dict:
     }
 
 
-def test_adjacent_delayed_legs_merge_into_one_corridor_timed_against_midday():
+def test_adjacent_delayed_legs_merge_into_one_corridor_timed_against_free_flow():
     paths = [route("1234")]
     by_hour = {
-        22: hour(A1=[(30, 100)] * 3),  # empty night roads are not the yardstick
-        12: hour(A1=[(60, 100)] * 3),
-        8: hour(A1=[(120, 100), (120, 100), (60, 100)]),  # legs 1-2 and 2-3 double
+        22: hour(A1=[(30, 100)] * 3),  # empty night roads: the free-flow time
+        12: hour(A1=[(60, 100), (60, 100), (30, 100)]),
+        8: hour(A1=[(120, 100), (120, 100), (30, 100)]),
     }
     (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
 
@@ -46,11 +46,25 @@ def test_adjacent_delayed_legs_merge_into_one_corridor_timed_against_midday():
     assert corridor["legs"] == ["1>2", "2>3"]
     assert corridor["length_m"] == 800
     assert corridor["routes"] == ["A1"]
-    # 2 legs x 100 rides x 60 s over midday, over 20 weekdays = 600 s = 10 bus-minutes.
-    assert corridor["lost_min"] == pytest.approx(10)
-    assert corridor["lost_per_km"] == pytest.approx(12.5)
+    # Per leg 100 rides x 30 s at midday + 100 x 90 s at rush over free flow;
+    # 2 legs over 20 weekdays = 1200 s = 20 bus-minutes.
+    assert corridor["lost_min"] == pytest.approx(20)
+    assert corridor["lost_per_km"] == pytest.approx(25)
     assert corridor["buses"] == pytest.approx(5)
-    assert corridor["delay"] == pytest.approx(1.0)
+    assert corridor["delay"] == pytest.approx(1.33)
+
+
+def test_a_street_jammed_all_day_is_a_candidate():
+    paths = [route("123")]
+    by_hour = {
+        6: hour(A1=[(30, 100)] * 2),
+        12: hour(A1=[(90, 100)] * 2),  # as slow at midday as at rush
+        8: hour(A1=[(90, 100)] * 2),
+    }
+    (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
+    assert corridor["legs"] == ["1>2", "2>3"]
+    # 2 legs x 2 hours x 100 rides x 60 s over 20 weekdays = 1200 s.
+    assert corridor["lost_min"] == pytest.approx(20)
 
 
 def test_corridor_carries_each_leg_drawn_along_the_route_shape():
@@ -140,11 +154,22 @@ def test_a_few_rides_caught_in_a_terminal_layover_do_not_make_a_leg_hot():
     assert rank_corridors(paths, STOPS, by_hour, weekdays=20) == []
 
 
-def test_leg_without_a_trusted_midday_baseline_is_ignored():
+def test_leg_without_a_trusted_free_flow_hour_is_ignored():
     paths = [route("123")]
     by_hour = {
-        12: hour(A1=[(60, 3)] * 2),  # too few rides to be a baseline
-        22: hour(A1=[(30, 100)] * 2),  # plenty at night, but night is not the yardstick
-        8: hour(A1=[(120, 100)] * 2),
+        22: hour(A1=[(30, 3)] * 2),  # too few rides to be the yardstick
+        12: hour(A1=[(60, 3)] * 2),
+        8: hour(A1=[(120, 3)] * 2),
     }
     assert rank_corridors(paths, STOPS, by_hour, weekdays=20) == []
+
+
+def test_slowest_ranking_puts_the_most_delayed_busy_stretch_first():
+    paths = [route("12", "A1"), route("34", "B2"), route("56", "C3")]
+    by_hour = {
+        6: hour(A1=[(60, 100)], B2=[(60, 100)], C3=[(60, 10)]),
+        # A1 loses more bus time, B2 is slower; C3 is slowest but nearly empty.
+        8: hour(A1=[(90, 400)], B2=[(150, 100)], C3=[(300, 10)]),
+    }
+    ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20, order="delay", min_buses=5)
+    assert [c["routes"] for c in ranked] == [["B2"], ["A1"]]

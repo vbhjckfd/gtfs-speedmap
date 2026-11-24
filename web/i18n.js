@@ -26,16 +26,23 @@ const I18N = {
       "Real vehicles, timed between your two ends — anywhere on a route, not just at its stops. Standing at stops and waiting at lights is included; waiting for the bus to turn up is not. Averages add up to a journey and medians do not, so a long ride reads about a tenth quicker on the median. Drag either end to move it, Esc to clear.",
     lanesH: "Bus lane candidates",
     lanesNote:
-      "Weekday rush hours (07–09, 16–18): stretches of 300 m or more that run at least a quarter slower than at weekday midday (10–15), ranked by bus time lost per km of lane — rides × seconds over midday. Where routes join or split, a stretch follows the busiest one. Click one to see it.",
+      "Weekdays, all day: stretches of 300 m or more that run at least a quarter slower than on empty roads (each leg's quickest hour), ranked by bus time lost per km of lane — rides × seconds over that quickest hour. Where routes join or split, a stretch follows the busiest one. Click one to see it.",
     lanesNone: "No stretch qualifies this month.",
     lanesLost: ({ min }) => `${min} bus-min/day`,
     lanesPerKm: ({ min }) => `${min} bus-min/km/day`,
     lanesBuses: ({ n }) => `${n} buses/h`,
-    lanesTitle: "Where Lviv needs bus lanes — stretches ranked by rush-hour bus time lost",
+    lanesTitle: "Where Lviv needs bus lanes — stretches ranked by bus time lost to traffic",
     lanesDescription:
-      "The Lviv bus stretches where a bus-only lane would win back the most time: weekday rush-hour delay against midday, in bus-minutes lost per km, measured on archived GTFS-RT vehicles.",
+      "The Lviv bus stretches where a bus-only lane would win back the most time: weekday delay against empty roads, in bus-minutes lost per km, measured on archived GTFS-RT vehicles.",
     lanesLink: "Where bus lanes would pay →",
     lanesBack: "← Ride-time map",
+    slowH: "Slowest stretches",
+    slowNote:
+      "Weekdays, all day: stretches of 300 m or more, carrying at least six buses an hour, ranked by how much longer buses take than on empty roads (each leg's quickest hour). Where routes join or split, a stretch follows the busiest one. Click one to see it.",
+    slowTitle: "Lviv's slowest bus stretches — ranked by delay against empty roads",
+    slowDescription:
+      "The Lviv bus stretches where weekday buses run slowest against empty roads, among streets with at least six buses an hour, measured on archived GTFS-RT vehicles.",
+    slowLink: "Slowest stretches →",
     langName: "English",
 
     // Crawlable and screen-reader text.
@@ -118,16 +125,23 @@ const I18N = {
       "Справжні автобуси, виміряні між вашими двома точками — будь-де на маршруті, не лише на зупинках. Стояння на зупинках і світлофорах враховано, а очікування автобуса — ні. Середні складаються в цілу поїздку, а медіани — ні, тож довга поїздка за медіаною виходить приблизно на десяту частину коротшою. Перетягніть будь-яку точку, щоб її посунути; Esc — очистити.",
     lanesH: "Кандидати на смугу для громадського транспорту",
     lanesNote:
-      "Будні години пік (07–09, 16–18): ділянки від 300 м, де їдуть щонайменше на чверть повільніше, ніж у будній полудень (10–15), за втраченим часом автобусів на кілометр смуги — поїздки × секунди понад полудень. Де маршрути сходяться чи розходяться, ділянка йде за найнавантаженішим. Натисніть, щоб побачити на карті.",
+      "Будні, увесь день: ділянки від 300 м, де їдуть щонайменше на чверть повільніше, ніж порожніми дорогами (найшвидша година перегону), за втраченим часом автобусів на кілометр смуги — поїздки × секунди понад найшвидшу годину. Де маршрути сходяться чи розходяться, ділянка йде за найнавантаженішим. Натисніть, щоб побачити на карті.",
     lanesNone: "Цього місяця таких ділянок немає.",
     lanesLost: ({ min }) => `${min} хв автобусів/день`,
     lanesPerKm: ({ min }) => `${min} хв/км/день`,
     lanesBuses: ({ n }) => `автобусів/год: ${n}`,
-    lanesTitle: "Де Львову потрібні смуги для автобусів — ділянки за втраченим у пік часом",
+    lanesTitle: "Де Львову потрібні смуги для автобусів — ділянки за часом, втраченим у заторах",
     lanesDescription:
-      "Ділянки автобусної мережі Львова, де виділена смуга повернула б найбільше часу: затримка в будні години пік відносно полудня, у хвилинах автобусів на кілометр, за архівом GTFS-RT.",
+      "Ділянки автобусної мережі Львова, де виділена смуга повернула б найбільше часу: затримка в будні відносно порожніх доріг, у хвилинах автобусів на кілометр, за архівом GTFS-RT.",
     lanesLink: "Де потрібні смуги для автобусів →",
     lanesBack: "← Карта часу поїздки",
+    slowH: "Найповільніші ділянки",
+    slowNote:
+      "Будні, увесь день: ділянки від 300 м, де їде щонайменше шість автобусів на годину, за тим, наскільки довше автобуси їдуть, ніж порожніми дорогами (найшвидша година перегону). Де маршрути сходяться чи розходяться, ділянка йде за найнавантаженішим. Натисніть, щоб побачити на карті.",
+    slowTitle: "Найповільніші автобусні ділянки Львова — за затримкою відносно порожніх доріг",
+    slowDescription:
+      "Ділянки автобусної мережі Львова, де в будні автобуси їдуть найповільніше відносно порожніх доріг, серед вулиць із щонайменше шістьма автобусами на годину, за архівом GTFS-RT.",
+    slowLink: "Найповільніші ділянки →",
     langName: "Українська",
 
     aboutH: "Що показує ця карта",
