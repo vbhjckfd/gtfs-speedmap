@@ -1,6 +1,12 @@
 # The data filenames are stable across rebuilds, so they must revalidate.
 /data/*
   Cache-Control: public, max-age=300, must-revalidate
+  X-Robots-Tag: noindex
+
+# The site lives on its own domain; keep the workers.dev copy (and its
+# version URLs) out of search results.
+https://:worker.:subdomain.workers.dev/*
+  X-Robots-Tag: noindex
 
 /vendor/*
   Cache-Control: public, max-age=604800
