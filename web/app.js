@@ -36,6 +36,7 @@ const els = {
   ruler: document.getElementById("ruler"),
   rides: document.getElementById("rides"),
   rulerClear: document.getElementById("ruler-clear"),
+  lanesList: document.getElementById("lanes-list"),
   rulerButton: null, // the map control, created below
   panel: document.getElementById("panel"),
   panelToggle: document.getElementById("panel-toggle"),
@@ -416,6 +417,70 @@ function nearestLeg(point) {
 
 const legsLayer = new LegLayer();
 
+/* ---------- bus lane candidates ---------- */
+
+// Ranked at build time (lanes.py) from weekday rush hours, whatever is on screen.
+const LANES = { list: [], layer: null };
+
+async function loadLanes() {
+  const month = els.month.value;
+  const list = await fetchSelection(`lanes-${month}`).catch(() => []);
+  if (month !== els.month.value) return;
+  LANES.list = list;
+  lanesRender();
+}
+
+function laneClear() {
+  if (LANES.layer) map.removeLayer(LANES.layer);
+  LANES.layer = null;
+}
+
+function lanesRender() {
+  laneClear();
+  const stops = LANES.list;
+  els.lanesList.innerHTML = stops.length
+    ? stops.map(laneRow).join("")
+    : `<div class="ride-empty">${t("lanesNone")}</div>`;
+}
+
+function laneRow(c, i) {
+  const km = (c.length_m / 1000).toLocaleString(locale(), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  const routes = c.routes.slice(0, 6).join(", ") + (c.routes.length > 6 ? "…" : "");
+  return (
+    `<button type="button" class="ride-row" data-lane="${i}">` +
+    `<span class="ride-name">${i + 1}</span>` +
+    `<span class="ride-time">${t("lanesLost", { min: Math.round(c.lost_min) })}</span>` +
+    `<span class="ride-detail">${c.from} → ${c.to}<br>` +
+    `${km} ${t("km")} · ${t("lanesBuses", { n: Math.round(c.buses) })} · ` +
+    `+${Math.round(c.delay * 100)}% · ${routes}</span>` +
+    `</button>`
+  );
+}
+
+function laneShow(c) {
+  laneClear();
+  const byKey = new Map(RIDES.legs.map((leg) => [`${leg.a}>${leg.b}`, leg.points]));
+  const lines = c.legs.map((k) => byKey.get(k)).filter(Boolean);
+  if (!lines.length) return;
+  LANES.layer = L.polyline(lines, {
+    color: "#3b6ea5",
+    weight: 9,
+    opacity: 0.55,
+    interactive: false,
+  }).addTo(map);
+  map.fitBounds(LANES.layer.getBounds(), { maxZoom: 16, padding: [60, 60] });
+}
+
+els.lanesList.addEventListener("click", (e) => {
+  const row = e.target.closest("[data-lane]");
+  if (!row) return;
+  els.lanesList.querySelectorAll(".ride-row").forEach((r) => r.classList.toggle("active", r === row));
+  laneShow(LANES.list[row.dataset.lane]);
+});
+
 /* ---------- shareable URL ---------- */
 
 // The selection lives in the query string so a view can be linked. The
@@ -552,6 +617,7 @@ async function render() {
     await loadMonth();
     if (seq !== requestSeq) return;
     repaint();
+    loadLanes();
   } catch (err) {
     if (seq !== requestSeq) return;
     RIDES.key = null;
@@ -1265,6 +1331,7 @@ function relabel() {
   panelCollapse(els.panel.classList.contains("collapsed"));
   map.closePopup();
   if (RULER.on) els.rides.innerHTML = ridesReadout();
+  lanesRender();
   if (currentRides()) els.subtitle.textContent = describe();
 }
 

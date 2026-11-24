@@ -24,6 +24,12 @@ const I18N = {
     clear: "Clear",
     rulerNote:
       "Real vehicles, timed between your two ends — anywhere on a route, not just at its stops. Standing at stops and waiting at lights is included; waiting for the bus to turn up is not. Averages add up to a journey and medians do not, so a long ride reads about a tenth quicker on the median. Drag either end to move it, Esc to clear.",
+    lanesH: "Bus lane candidates",
+    lanesNote:
+      "Weekday rush hours (07–09, 16–18): stretches of 300 m or more that run at least a quarter slower than their quickest hour, ranked by bus time lost — rides × seconds over off-peak. Click one to see it.",
+    lanesNone: "No stretch qualifies this month.",
+    lanesLost: ({ min }) => `${min} bus-min/day`,
+    lanesBuses: ({ n }) => `${n} buses/h`,
     langName: "English",
 
     // Crawlable and screen-reader text.
@@ -104,6 +110,12 @@ const I18N = {
     clear: "Очистити",
     rulerNote:
       "Справжні автобуси, виміряні між вашими двома точками — будь-де на маршруті, не лише на зупинках. Стояння на зупинках і світлофорах враховано, а очікування автобуса — ні. Середні складаються в цілу поїздку, а медіани — ні, тож довга поїздка за медіаною виходить приблизно на десяту частину коротшою. Перетягніть будь-яку точку, щоб її посунути; Esc — очистити.",
+    lanesH: "Кандидати на смугу для громадського транспорту",
+    lanesNote:
+      "Будні години пік (07–09, 16–18): ділянки від 300 м, де їдуть щонайменше на чверть повільніше, ніж у найшвидшу годину, за втраченим часом автобусів — поїздки × секунди понад норму. Натисніть, щоб побачити на карті.",
+    lanesNone: "Цього місяця таких ділянок немає.",
+    lanesLost: ({ min }) => `${min} хв автобусів/день`,
+    lanesBuses: ({ n }) => `автобусів/год: ${n}`,
     langName: "Українська",
 
     aboutH: "Що показує ця карта",

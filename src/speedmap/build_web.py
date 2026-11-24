@@ -34,6 +34,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
+from .lanes import rank_corridors
 from .config import (
     SEG_BIN_S,
     SEG_DIR,
@@ -314,6 +315,7 @@ def build_month(month: str) -> dict:
         total_bytes += _write(name, obj)
         written.add(f"{name}.json")
 
+    weekday_rides: dict[int, dict] = {}
     for daytype in [*DAYTYPES, ALL]:
         legs = _combine_rides(leg_slices, month, daytype, ["hour", *SEG_KEYS])
         seg_bins = _combine_rides(seg_bin_slices, month, daytype, ["hour", *SEG_KEYS, "bin"])
@@ -324,12 +326,21 @@ def build_month(month: str) -> dict:
                 part = legs[legs["hour"] == hour]
                 part_bins = seg_bins[seg_bins["hour"] == hour]
             hour_key = ALL if hour == ALL else f"{hour:02d}"
-            write(f"rides-{month}-{daytype}-{hour_key}", _rides(part, part_bins, paths))
+            rides = _rides(part, part_bins, paths)
+            write(f"rides-{month}-{daytype}-{hour_key}", rides)
+            if daytype == "wd" and hour != ALL:
+                weekday_rides[hour] = rides
         del legs, seg_bins
 
     # Geometry is the same whatever day type or hour is on screen, so it ships
     # once per month and the selection files carry only numbers.
     write(f"paths-{month}", {"stops": stops, "routes": paths})
+    write(
+        f"lanes-{month}",
+        rank_corridors(paths, stops, weekday_rides, types.get("wd", 0))
+        if types.get("wd")
+        else [],
+    )
 
     meta = {
         "key": month,

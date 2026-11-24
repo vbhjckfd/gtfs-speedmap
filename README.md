@@ -29,6 +29,7 @@ data/paths/YYYY-MM.json                     route shapes and stop order, from th
         ▼
 web/data/paths-{month}.json                 route lines and stop order
 web/data/rides-{month}-{days}-{hour}.json   per-leg times per route — the map and the ruler
+web/data/lanes-{month}.json                 top bus-lane candidates, weekday rush
 web/data/month-{month}.json, index.json     menus
         │  make deploy
         ▼
@@ -122,6 +123,15 @@ so both statistics come out of one build.
 | Average | The figure that adds up along a journey — see the ruler below. |
 
 A leg seen on fewer than `SEG_MIN_OBS` rides in a slot is left out (`null`) rather than guessed.
+
+## Bus lane candidates
+
+[`lanes.py`](src/speedmap/lanes.py) ranks where a bus-only lane would pay. A leg is *hot* when its
+weekday rush-hour ride time (07–09, 16–18) is at least `HOT_DELAY` (+25%) over its own off-peak.
+Adjacent hot legs with no fork between them merge into a corridor, dropped under `LANE_MIN_M`
+(300 m). Corridors are ranked by **bus-minutes lost per weekday rush** — rides × seconds over
+off-peak — so a busy street beats a slow, empty one. Pooled means are used, not medians, because
+only the mean adds up. Shown in the panel; clicking a row draws the corridor.
 
 ## Ride time between two points
 

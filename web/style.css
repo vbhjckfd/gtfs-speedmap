@@ -122,6 +122,20 @@ input[type="range"] {
   color: var(--muted);
 }
 
+.lanes {
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.lanes summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.lanes .note {
+  margin: 4px 0;
+}
+
 .credit {
   margin: 10px 0 0;
   padding-top: 9px;
