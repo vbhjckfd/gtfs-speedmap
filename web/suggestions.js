@@ -16,6 +16,13 @@ let index = null;
 let corridors = [];
 const drawn = L.layerGroup().addTo(map);
 const picked = L.layerGroup().addTo(map);
+// Zoomed out, a corridor is shorter than its arrows and they would hide it.
+const arrows = L.layerGroup();
+const ARROWS_FROM_ZOOM = 14;
+map.on("zoomend", () => {
+  if (map.getZoom() >= ARROWS_FROM_ZOOM) arrows.addTo(map);
+  else arrows.remove();
+});
 
 function writeUrl() {
   const query = `?month=${els.month.value}&lang=${LANG}`;
@@ -75,13 +82,21 @@ function fit(bounds, options) {
   });
 }
 
+// The way buses run along a leg, at its middle vertex pair.
+function legArrow(leg) {
+  const mid = Math.floor((leg.length - 1) / 2);
+  return arrowMarker(leg[mid], leg[mid + 1]);
+}
+
 function draw() {
   drawn.clearLayers();
+  arrows.clearLayers();
   picked.clearLayers();
   corridors.forEach((c, i) => {
     const line = L.polyline(c.lines, { color: "#c0392b", weight: 6, opacity: 0.8 });
     line.on("click", () => pick(i));
     drawn.addLayer(line);
+    for (const leg of c.lines) arrows.addLayer(legArrow(leg));
   });
   if (corridors.length) {
     fit(L.featureGroup(drawn.getLayers()).getBounds(), { padding: 30 });
@@ -96,10 +111,7 @@ function pick(i) {
   const lines = corridors[i].lines;
   L.polyline(lines, { color: "#16202a", weight: 9, opacity: 0.9 }).addTo(picked);
   L.polyline(lines, { color: "#e74c3c", weight: 5 }).addTo(picked);
-  for (const leg of lines) {
-    const mid = Math.floor((leg.length - 1) / 2);
-    arrowMarker(leg[mid], leg[mid + 1]).addTo(picked);
-  }
+  for (const leg of lines) legArrow(leg).addTo(picked);
   fit(L.polyline(lines).getBounds(), { maxZoom: 16, padding: 60 });
 }
 
