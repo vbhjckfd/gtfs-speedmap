@@ -1,4 +1,4 @@
-"""Where a bus lane would pay: delayed stretches ranked by the bus time they cost.
+"""The slowest stretches: delayed corridors ranked by how much longer than on empty roads.
 
 A leg is hot when, over the whole weekday, it takes HOT_DELAY longer than in its
 quickest hour, the free-flow time on empty roads. The quickest hour, not midday,
@@ -7,16 +7,12 @@ and measured against midday it would look fine. Adjacent hot
 legs are merged into one corridor along the busiest stream, since a lane on one
 200 m block helps nobody; where routes join or split, the corridor follows the
 leg with the most buses and the lighter branch starts its own. Corridors are
-ranked by bus-minutes lost per weekday per km of lane: rides x median
-seconds over free flow, so a slow street nobody drives loses to a slightly slower one that
-carries forty buses an hour, and a short bottleneck beats a long mild street.
-
-The same corridors ranked by delay alone (`order="delay"`) are the slowest
-stretches: how much longer than on empty roads, for streets with at least
+ranked by delay: how much longer than on empty roads, for streets with at least
 SLOW_MIN_BUSES buses an hour, since a crawl nobody rides is no one's problem.
+Each also carries the bus-minutes it loses per weekday, in total and per km.
 
 Built once per month from the weekday ride payloads, and written beside them as
-web/data/lanes-YYYY-MM.json and lanes-slow-YYYY-MM.json.
+web/data/lanes-slow-YYYY-MM.json for /slowest.
 """
 
 from __future__ import annotations
@@ -104,11 +100,9 @@ def rank_corridors(
     *,
     min_m: float = LANE_MIN_M,
     limit: int = TOP_N,
-    order: str = "lost_per_km",
     min_buses: float = 0,
 ) -> list[dict]:
-    """The worst delayed stretches, most bus-minutes lost per km first, or with
-    `order="delay"` the most delayed first among those with `min_buses` an hour.
+    """The most delayed stretches first, among those with `min_buses` an hour.
 
     `by_hour` is the weekday ride payload of each local hour, as the viewer loads it.
     """
@@ -153,7 +147,7 @@ def rank_corridors(
                 "from": stops.get(members[0]["a"], [0, 0, members[0]["a"]])[2],
                 "to": stops.get(members[-1]["b"], [0, 0, members[-1]["b"]])[2],
                 "legs": chain,
-                # Drawn as is by /suggestions, which loads no route geometry of its own.
+                # Drawn as is by /slowest, which loads no route geometry of its own.
                 "lines": [[[round(c, 5) for c in p] for p in m["line"]] for m in members],
                 "length_m": round(length),
                 "routes": sorted(set().union(*(m["names"] for m in members))),
@@ -166,5 +160,5 @@ def rank_corridors(
             }
         )
     corridors = [c for c in corridors if c["buses"] >= min_buses]
-    corridors.sort(key=lambda c: c[order], reverse=True)
+    corridors.sort(key=lambda c: c["delay"], reverse=True)
     return corridors[:limit]

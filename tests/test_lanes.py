@@ -1,4 +1,4 @@
-"""Bus-lane candidates: delayed stretches ranked by the bus time they cost per km."""
+"""Slowest stretches: delayed corridors ranked by delay against free flow."""
 
 from __future__ import annotations
 
@@ -111,17 +111,6 @@ def test_corridor_shorter_than_a_lane_is_worth_is_dropped():
     assert rank_corridors(paths, STOPS, by_hour, weekdays=20, min_m=500) == []
 
 
-def test_short_dense_bottleneck_outranks_a_long_mildly_slow_street():
-    paths = [route("12", "A1"), route("3456", "B2")]
-    by_hour = {
-        12: hour(A1=[(60, 100)], B2=[(60, 100)] * 3),
-        # A1: 400 m, 7.5 bus-min lost. B2: 1200 m, 10 bus-min lost.
-        8: hour(A1=[(150, 100)], B2=[(100, 100)] * 3),
-    }
-    ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20)
-    assert [c["routes"] for c in ranked] == [["A1"], ["B2"]]
-
-
 def test_street_carries_on_through_a_stop_where_a_lighter_route_joins():
     paths = [route("1234", "A1"), route("52", "B2")]
     by_hour = {
@@ -171,5 +160,5 @@ def test_slowest_ranking_puts_the_most_delayed_busy_stretch_first():
         # A1 loses more bus time, B2 is slower; C3 is slowest but nearly empty.
         8: hour(A1=[(90, 400)], B2=[(150, 100)], C3=[(300, 10)]),
     }
-    ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20, order="delay", min_buses=5)
+    ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20, min_buses=5)
     assert [c["routes"] for c in ranked] == [["B2"], ["A1"]]

@@ -354,14 +354,8 @@ def build_month(month: str) -> dict:
     write(f"paths-{month}", {"stops": stops, "routes": paths})
     weekdays = types.get("wd", 0)
     write(
-        f"lanes-{month}",
-        rank_corridors(paths, stops, weekday_rides, weekdays) if weekdays else [],
-    )
-    write(
         f"lanes-slow-{month}",
-        rank_corridors(
-            paths, stops, weekday_rides, weekdays, order="delay", min_buses=SLOW_MIN_BUSES
-        )
+        rank_corridors(paths, stops, weekday_rides, weekdays, min_buses=SLOW_MIN_BUSES)
         if weekdays
         else [],
     )

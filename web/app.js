@@ -32,7 +32,6 @@ const els = {
   ruler: document.getElementById("ruler"),
   rides: document.getElementById("rides"),
   rulerClear: document.getElementById("ruler-clear"),
-  lanesLink: document.getElementById("lanes-link"),
   slowLink: document.getElementById("slow-link"),
   rulerButton: null, // the map control, created below
   panel: document.getElementById("panel"),
@@ -375,13 +374,11 @@ function nearestLeg(point) {
 
 const legsLayer = new LegLayer();
 
-/* ---------- bus lane candidates ---------- */
+/* ---------- slowest stretches ---------- */
 
-// Their own pages; the links carry the month and language over.
-function lanesLink() {
-  const query = `?month=${els.month.value}&lang=${LANG}`;
-  els.lanesLink.href = `suggestions${query}`;
-  els.slowLink.href = `slowest${query}`;
+// Its own page; the link carries the month and language over.
+function slowLink() {
+  els.slowLink.href = `slowest?month=${els.month.value}&lang=${LANG}`;
 }
 
 /* ---------- shareable URL ---------- */
@@ -406,7 +403,7 @@ function writeUrl() {
   // replaceState, not pushState: dragging the slider must not bury the user's
   // previous page under twenty history entries.
   history.replaceState(null, "", `?${params}`);
-  lanesLink();
+  slowLink();
 }
 
 // The hour bins are local to the feed's city, so "now" means now *there* —

@@ -6,11 +6,6 @@
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://speedmap.lad.lviv.ua/suggestions</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
     <loc>https://speedmap.lad.lviv.ua/slowest</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>

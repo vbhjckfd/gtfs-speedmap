@@ -29,7 +29,7 @@ data/paths/YYYY-MM.json                     route shapes and stop order, from th
         ▼
 web/data/paths-{month}.json                 route lines and stop order
 web/data/rides-{month}-{days}-{hour}.json   per-leg times per route — the map and the ruler
-web/data/lanes{,-slow}-{month}.json        top bus-lane candidates; slowest stretches
+web/data/lanes-slow-{month}.json           slowest stretches
 web/data/month-{month}.json, index.json     menus
         │  make deploy
         ▼
@@ -124,23 +124,20 @@ so both statistics come out of one build.
 
 A leg seen on fewer than `SEG_MIN_OBS` rides in a slot is left out (`null`) rather than guessed.
 
-## Bus lane candidates
+## Slowest stretches
 
-[`lanes.py`](src/speedmap/lanes.py) ranks where a bus-only lane would pay. A leg is *hot* when its
-weekday ride time, over the whole day, is at least `HOT_DELAY` (+25%) over its free-flow time: its
-quickest weekday hour with `BASELINE_MIN_RIDES` rides. The quickest hour, not midday, is the
-yardstick: a street jammed from morning to evening is as slow at midday as at rush, and against
-midday it would look fine. Adjacent hot legs merge into a corridor along the
-busiest stream — where routes join or split, the corridor follows the leg with the most buses and
-the lighter branch starts its own — and corridors under `LANE_MIN_M` (300 m) are dropped. They are
-ranked by **bus-minutes lost per weekday per km of lane** — rides × median seconds over free flow,
-divided by length — so a busy street beats a slow, empty one and a short bottleneck beats a long,
-mildly slow street. Shown on
-their own page, [`/suggestions`](https://speedmap.lad.lviv.ua/suggestions), linked from the map's
-panel. The same corridors ranked by delay alone, among those with at least `SLOW_MIN_BUSES` (6)
-buses an hour, are [`/slowest`](https://speedmap.lad.lviv.ua/slowest), from `lanes-slow-<month>.json`.
-Each corridor ships its legs already drawn along the route shapes (`lines`), so that page
-loads only `lanes-<month>.json`; clicking a row draws the corridor with its direction.
+[`lanes.py`](src/speedmap/lanes.py) ranks the stretches where buses run slowest. A leg is *hot*
+when its weekday ride time, over the whole day, is at least `HOT_DELAY` (+25%) over its free-flow
+time: its quickest weekday hour with `BASELINE_MIN_RIDES` rides. The quickest hour, not midday, is
+the yardstick: a street jammed from morning to evening is as slow at midday as at rush, and against
+midday it would look fine. Adjacent hot legs merge into a corridor along the busiest stream — where
+routes join or split, the corridor follows the leg with the most buses and the lighter branch starts
+its own — and corridors under `LANE_MIN_M` (300 m) are dropped. Those with at least
+`SLOW_MIN_BUSES` (6) buses an hour are ranked by delay against free flow and shown on
+[`/slowest`](https://speedmap.lad.lviv.ua/slowest), linked from the map's panel, with the
+bus-minutes each loses per weekday, in total and per km. Each corridor ships its legs already drawn
+along the route shapes (`lines`), so that page loads only `lanes-slow-<month>.json`; clicking a row
+draws the corridor with its direction.
 
 ## Ride time between two points
 
