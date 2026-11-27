@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from .traces import leg_line, metres
 
-HOT_DELAY = 0.25
+# High enough that a stretch ends where the jam does: a short lane is easier to win.
+HOT_DELAY = 0.75
 LANE_MIN_M = 300
 TOP_N = 10
 # Weekday buses an hour, all-day average, a stretch needs to rank as slowest.

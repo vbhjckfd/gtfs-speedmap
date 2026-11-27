@@ -159,7 +159,7 @@ def test_slowest_ranking_puts_the_most_delayed_busy_stretch_first():
     by_hour = {
         6: hour(A1=[(60, 100)], B2=[(60, 100)], C3=[(60, 10)]),
         # A1 loses more bus time, B2 is slower; C3 is slowest but nearly empty.
-        8: hour(A1=[(90, 400)], B2=[(150, 100)], C3=[(300, 10)]),
+        8: hour(A1=[(120, 400)], B2=[(150, 100)], C3=[(300, 10)]),
     }
     ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20, min_buses=5)
     assert [c["routes"] for c in ranked] == [["B2"], ["A1"]]
@@ -201,3 +201,16 @@ def test_corridor_delay_is_its_slowest_hour_as_a_whole_not_each_legs_own_worst()
     (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
     # 180 s at 8 or at 17 against 120 s at either end of the day.
     assert corridor["delay"] == pytest.approx(0.5)
+
+
+def test_a_leg_only_somewhat_slower_at_rush_does_not_stretch_the_corridor():
+    # 2>3 runs 50% over its empty-road time at rush: slower, but not a jam,
+    # so the stretch ends where the jam on 1>2 does.
+    paths = [route("123")]
+    by_hour = {
+        6: hour(A1=[(60, 100)] * 2),
+        8: hour(A1=[(180, 100), (90, 100)]),
+        22: hour(A1=[(60, 100)] * 2),
+    }
+    (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
+    assert corridor["legs"] == ["1>2"]

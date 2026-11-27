@@ -130,7 +130,7 @@ A leg seen on fewer than `SEG_MIN_OBS` rides in a slot is left out (`null`) rath
 empty-road time is the quicker of its first and last weekday service hours with `BASELINE_MIN_RIDES`
 rides — the first buses of the morning and the last of the evening (a service day starts at
 `DAY_START_HOUR`, so runs after midnight count as the last). A leg is *hot* when its slowest such hour
-is at least `HOT_DELAY` (+25%) over that. Adjacent hot legs merge into a corridor along the busiest stream — where
+is at least `HOT_DELAY` (+75%, so a stretch ends where the jam does: a short lane is easier to win) over that. Adjacent hot legs merge into a corridor along the busiest stream — where
 routes join or split, the corridor follows the leg with the most buses and the lighter branch starts
 its own — and corridors under `LANE_MIN_M` (300 m) are dropped. Those with at least
 `SLOW_MIN_BUSES` (6) buses an hour are ranked by delay — the whole stretch's slowest hour against its first and last runs — and shown on
