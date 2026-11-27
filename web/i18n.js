@@ -31,7 +31,7 @@ const I18N = {
     lanesBack: "← Ride-time map",
     slowH: "Slowest stretches",
     slowNote:
-      "Weekdays, all day: stretches of 300 m or more, carrying at least six buses an hour, ranked by how much longer buses take than on empty roads (each leg's quickest hour). Where routes join or split, a stretch follows the busiest one. Click one to see it.",
+      "Weekdays, all day: stretches of 300 m or more, carrying at least six buses an hour, ranked by how much longer buses take in the slowest hour than on empty roads (the quicker of the first morning and last evening runs). Where routes join or split, a stretch follows the busiest one. Click one to see it.",
     slowTitle: "Lviv's slowest bus stretches — ranked by delay against empty roads",
     slowDescription:
       "The Lviv bus stretches where weekday buses run slowest against empty roads, among streets with at least six buses an hour, measured on archived GTFS-RT vehicles.",
@@ -123,7 +123,7 @@ const I18N = {
     lanesBack: "← Карта часу поїздки",
     slowH: "Найповільніші ділянки",
     slowNote:
-      "Будні, увесь день: ділянки від 300 м, де їде щонайменше шість автобусів на годину, за тим, наскільки довше автобуси їдуть, ніж порожніми дорогами (найшвидша година перегону). Де маршрути сходяться чи розходяться, ділянка йде за найнавантаженішим. Натисніть, щоб побачити на карті.",
+      "Будні, увесь день: ділянки від 300 м, де їде щонайменше шість автобусів на годину, за тим, наскільки довше автобуси їдуть у найповільнішу годину, ніж порожніми дорогами (швидший із перших ранкових і останніх вечірніх рейсів). Де маршрути сходяться чи розходяться, ділянка йде за найнавантаженішим. Натисніть, щоб побачити на карті.",
     slowTitle: "Найповільніші автобусні ділянки Львова — за затримкою відносно порожніх доріг",
     slowDescription:
       "Ділянки автобусної мережі Львова, де в будні автобуси їдуть найповільніше відносно порожніх доріг, серед вулиць із щонайменше шістьма автобусами на годину, за архівом GTFS-RT.",

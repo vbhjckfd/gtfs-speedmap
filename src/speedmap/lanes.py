@@ -1,14 +1,16 @@
 """The slowest stretches: delayed corridors ranked by how much longer than on empty roads.
 
-A leg is hot when, over the whole weekday, it takes HOT_DELAY longer than in its
-quickest hour, the free-flow time on empty roads. The quickest hour, not midday,
-is the yardstick: a street jammed from morning to evening is slow at midday too,
-and measured against midday it would look fine. Adjacent hot
+A leg's empty-road time is the quicker of its first and last service hours of the
+weekday: the first buses of the morning and the last of the evening, before and
+after the traffic. Not the quickest hour of the day: an odd quick mid-morning
+would set a yardstick no bus keeps. A leg is hot when its slowest hour takes
+HOT_DELAY longer than that. Adjacent hot
 legs are merged into one corridor along the busiest stream, since a lane on one
 200 m block helps nobody; where routes join or split, the corridor follows the
 leg with the most buses and the lighter branch starts its own. Corridors are
-ranked by delay: how much longer than on empty roads, for streets with at least
-SLOW_MIN_BUSES buses an hour, since a crawl nobody rides is no one's problem.
+ranked by delay: how much longer the whole stretch takes in its slowest hour
+than on empty roads, for streets with at least SLOW_MIN_BUSES buses an hour,
+since a crawl nobody rides is no one's problem.
 Each also carries the bus-minutes it loses per weekday, in total and per km.
 
 Built once per month from the weekday ride payloads, and written beside them as
@@ -24,8 +26,10 @@ LANE_MIN_M = 300
 TOP_N = 10
 # Weekday buses an hour, all-day average, a stretch needs to rank as slowest.
 SLOW_MIN_BUSES = 6
-# Rides an hour needs before its time can be the free-flow baseline.
+# Rides an hour needs before its time counts, as the baseline or the slowest hour.
 BASELINE_MIN_RIDES = 10
+# Local hour the service day starts at, so runs after midnight are its last.
+DAY_START_HOUR = 4
 
 
 def _legs(paths: list[dict], stops: dict) -> dict[str, dict]:
@@ -75,21 +79,36 @@ def _pooled(leg: dict, payload: dict) -> tuple[float, int] | None:
 
 def _delay(leg: dict, by_hour: dict[int, dict], weekdays: int) -> dict | None:
     """What this leg costs over the weekday, or None if it is not delayed."""
-    times = [t for payload in by_hour.values() if (t := _pooled(leg, payload))]
-    trusted = [s for s, n in times if n >= BASELINE_MIN_RIDES]
+    times = {h: t for h, payload in by_hour.items() if (t := _pooled(leg, payload))}
+    trusted = {h: s for h, (s, n) in times.items() if n >= BASELINE_MIN_RIDES}
     if not trusted:
         return None
-    free_s = min(trusted)
-    rides = sum(n for _, n in times)
-    weighted = sum(s * n for s, n in times)
-    if weighted / (free_s * rides) - 1 < HOT_DELAY:
+    service = sorted(trusted, key=lambda h: (h - DAY_START_HOUR) % 24)
+    free_s = min(trusted[service[0]], trusted[service[-1]])
+    if max(trusted.values()) / free_s - 1 < HOT_DELAY:
         return None
+    rides = sum(n for _, n in times.values())
     return {
-        "lost_s": sum(max(0.0, s - free_s) * n for s, n in times) / weekdays,
+        "lost_s": sum(max(0.0, s - free_s) * n for s, n in times.values()) / weekdays,
         "buses": rides / weekdays / len(times),
-        "actual": weighted,
-        "baseline": free_s * rides,
+        "hourly": trusted,
+        "baseline": free_s,
     }
+
+
+def _corridor_delay(members: list[dict]) -> float:
+    """How much longer the stretch takes in its slowest hour than on empty roads.
+
+    The hour is the stretch's as a whole: adjacent legs jammed at different hours
+    never hold a bus up together. Falls back to each leg's own worst hour when
+    no hour is trusted on every leg.
+    """
+    shared = set.intersection(*(set(m["hourly"]) for m in members))
+    if shared:
+        slowest = max(sum(m["hourly"][h] for m in members) for h in shared)
+    else:
+        slowest = sum(max(m["hourly"].values()) for m in members)
+    return slowest / sum(m["baseline"] for m in members) - 1
 
 
 def rank_corridors(
@@ -154,9 +173,7 @@ def rank_corridors(
                 "lost_min": round(lost_min, 1),
                 "lost_per_km": round(lost_min / length * 1000, 1),
                 "buses": round(sum(m["buses"] for m in members) / len(members), 1),
-                "delay": round(
-                    sum(m["actual"] for m in members) / sum(m["baseline"] for m in members) - 1, 2
-                ),
+                "delay": round(_corridor_delay(members), 2),
             }
         )
     corridors = [c for c in corridors if c["buses"] >= min_buses]

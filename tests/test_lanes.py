@@ -1,4 +1,4 @@
-"""Slowest stretches: delayed corridors ranked by delay against free flow."""
+"""Slowest stretches: delayed corridors ranked by their slowest hour against the first and last runs."""
 
 from __future__ import annotations
 
@@ -51,7 +51,8 @@ def test_adjacent_delayed_legs_merge_into_one_corridor_timed_against_free_flow()
     assert corridor["lost_min"] == pytest.approx(20)
     assert corridor["lost_per_km"] == pytest.approx(25)
     assert corridor["buses"] == pytest.approx(5)
-    assert corridor["delay"] == pytest.approx(1.33)
+    # Slowest hour 120 s against the 30 s of the last night runs.
+    assert corridor["delay"] == pytest.approx(3.0)
 
 
 def test_a_street_jammed_all_day_is_a_candidate():
@@ -146,7 +147,7 @@ def test_a_few_rides_caught_in_a_terminal_layover_do_not_make_a_leg_hot():
 def test_leg_without_a_trusted_free_flow_hour_is_ignored():
     paths = [route("123")]
     by_hour = {
-        22: hour(A1=[(30, 3)] * 2),  # too few rides to be the yardstick
+        22: hour(A1=[(30, 3)] * 2),  # too few rides to count
         12: hour(A1=[(60, 3)] * 2),
         8: hour(A1=[(120, 3)] * 2),
     }
@@ -162,3 +163,41 @@ def test_slowest_ranking_puts_the_most_delayed_busy_stretch_first():
     }
     ranked = rank_corridors(paths, STOPS, by_hour, weekdays=20, min_buses=5)
     assert [c["routes"] for c in ranked] == [["B2"], ["A1"]]
+
+
+def test_baseline_is_the_quicker_of_the_first_and_last_service_hour_not_a_quiet_midday():
+    paths = [route("123")]
+    by_hour = {
+        6: hour(A1=[(60, 100)] * 2),  # first buses of the morning
+        10: hour(A1=[(30, 100)] * 2),  # an odd quick mid-morning: not the yardstick
+        17: hour(A1=[(90, 100)] * 2),  # the slowest hour of the day
+        22: hour(A1=[(45, 100)] * 2),  # last buses of the evening
+    }
+    (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
+    # Slowest hour 90 s against the evening's 45 s.
+    assert corridor["delay"] == pytest.approx(1.0)
+
+
+def test_last_service_hour_runs_past_midnight():
+    paths = [route("123")]
+    by_hour = {
+        0: hour(A1=[(40, 100)] * 2),  # the last runs, after midnight
+        8: hour(A1=[(100, 100)] * 2),
+        23: hour(A1=[(60, 100)] * 2),
+    }
+    (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
+    # First runs are at 8 (100 s), last at 0 (40 s): the baseline is 40 s.
+    assert corridor["delay"] == pytest.approx(1.5)
+
+
+def test_corridor_delay_is_its_slowest_hour_as_a_whole_not_each_legs_own_worst():
+    paths = [route("123")]
+    by_hour = {
+        6: hour(A1=[(60, 100)] * 2),
+        8: hour(A1=[(120, 100), (60, 100)]),
+        17: hour(A1=[(60, 100), (120, 100)]),
+        22: hour(A1=[(60, 100)] * 2),
+    }
+    (corridor,) = rank_corridors(paths, STOPS, by_hour, weekdays=20)
+    # 180 s at 8 or at 17 against 120 s at either end of the day.
+    assert corridor["delay"] == pytest.approx(0.5)
